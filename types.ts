@@ -2,7 +2,7 @@ import { Type } from "@google/genai";
 
 export type Language = 'es' | 'en';
 
-export type AppView = 'creative_analysis' | 'performance' | 'strategies' | 'reports' | 'clients' | 'import' | 'users' | 'logs' | 'control_panel' | 'help' | 'settings';
+export type AppView = 'creative_analysis' | 'performance' | 'strategies' | 'strategic_analysis' | 'reports' | 'clients' | 'import' | 'users' | 'logs' | 'control_panel' | 'help' | 'settings';
 
 export enum Severity {
     CRITICAL = 'CRITICAL',
@@ -316,6 +316,38 @@ export interface TrendCardData {
 
 export interface TrendsAnalysisResult {
     trends: TrendCardData[];
+}
+
+export interface StrategicAnalysisResult {
+    executiveSummary: string;
+    actionPlan: StrategicAction[];
+    creativeInsights: CreativeInsight[];
+    performanceRecommendations: PerformanceRecommendation[];
+    keyFindings: string[];
+    nextSteps: string[];
+}
+
+export interface StrategicAction {
+    title: string;
+    description: string;
+    priority: 'HIGH' | 'MEDIUM' | 'LOW';
+    expectedImpact: string;
+    timeline: string;
+    resources: string[];
+}
+
+export interface CreativeInsight {
+    adName: string;
+    insight: string;
+    recommendation: string;
+    impactLevel: 'HIGH' | 'MEDIUM' | 'LOW';
+}
+
+export interface PerformanceRecommendation {
+    category: 'BUDGET' | 'TARGETING' | 'CREATIVE' | 'BIDDING' | 'PLACEMENT';
+    recommendation: string;
+    expectedImpact: string;
+    priority: 'HIGH' | 'MEDIUM' | 'LOW';
 }
 
 export interface ReportMetadata {

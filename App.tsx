@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { GoogleGenAI, Type } from '@google/genai';
-import { AppView, Placement, Creative, AnalysisResult, FormatGroup, Language, CreativeSet, Client, AggregatedAdPerformance, User, AllLookerData, PerformanceRecord, TrendsAnalysisResult, TrendCardData, MetaApiConfig, BitacoraReport, UploadedVideo, ImportBatch, ProcessResult } from './types';
+import { AppView, Placement, Creative, AnalysisResult, FormatGroup, Language, CreativeSet, Client, AggregatedAdPerformance, User, AllLookerData, PerformanceRecord, TrendsAnalysisResult, TrendCardData, MetaApiConfig, BitacoraReport, UploadedVideo, ImportBatch, ProcessResult, StrategicAnalysisResult } from './types';
 import { PLACEMENTS, META_ADS_GUIDELINES } from './constants';
 import { PlatformAnalysisView } from './components/PlatformAnalysisView';
 import { Navbar } from './components/Navbar';
@@ -16,11 +16,13 @@ import { HelpView } from './components/HelpView';
 import { LogView } from './components/LogView';
 import { TrendsView } from './components/TrendsView';
 import { ReportsView } from './components/ReportsView';
+import { StrategicAnalysisView } from './components/StrategicAnalysisView';
 import { dbTyped, dbConnectionStatus } from './database';
 import Logger from './Logger';
 import { syncFromMetaAPI } from './lib/metaApiConnector';
 import { processPerformanceData } from './lib/dataProcessor';
 import { CreativeAnalysisView } from './components/CreativeAnalysisView';
+import { DataDiagnosticsModal } from './components/DataDiagnosticsModal';
 
 const fileToGenerativePart = async (file: File) => {
     const base64EncodedDataPromise = new Promise<string>((resolve, reject) => {
@@ -280,6 +282,7 @@ const App: React.FC = () => {
     const [currentUser, setCurrentUser] = useState<User | null>(null);
     const [mainView, setMainView] = useState<AppView>('creative_analysis');
     const [isLoading, setIsLoading] = useState<boolean>(true);
+    const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
 
     // Data State
     const [users, setUsers] = useState<User[]>([]);
@@ -315,10 +318,15 @@ const App: React.FC = () => {
 
                 if (loadedUsers.length === 0) {
                     Logger.warn('No users found in DB. Creating default Admin user.');
+                    console.log('=== CREATING DEFAULT USER ===');
                     const defaultAdmin: User = { id: crypto.randomUUID(), username: 'Admin', password: 'Admin', role: 'admin' };
+                    console.log('Default admin user:', defaultAdmin);
                     setUsers([defaultAdmin]);
                     await dbTyped.saveUsers([defaultAdmin]);
+                    console.log('Default user saved to database');
                 } else {
+                    console.log('=== LOADED USERS FROM DB ===');
+                    console.log('Loaded users:', loadedUsers);
                     setUsers(loadedUsers);
                 }
                 
@@ -330,7 +338,18 @@ const App: React.FC = () => {
                 setImportHistory(loadedHistory);
                 setPerformanceData(loadedPerfData);
                 
-                Logger.success(`Loaded ${loadedUsers.length} users, ${loadedClients.length} clients, and data for ${Object.keys(loadedLookerData).length} accounts.`);
+                // Debug logging para performance data
+                const perfRecordCount = Object.values(loadedPerfData).flat().length;
+                Logger.success(`Loaded ${loadedUsers.length} users, ${loadedClients.length} clients, ${perfRecordCount} performance records, and data for ${Object.keys(loadedLookerData).length} accounts.`);
+                
+                if (perfRecordCount > 0) {
+                    Logger.info(`Performance data loaded for clients: ${Object.keys(loadedPerfData).join(', ')}`);
+                    for (const [clientId, records] of Object.entries(loadedPerfData)) {
+                        Logger.info(`Client ${clientId}: ${records.length} performance records`);
+                    }
+                } else {
+                    Logger.warn('No performance data loaded from database!');
+                }
 
                 if (loggedInUser && (loadedUsers.length > 0 ? loadedUsers : [ { id: crypto.randomUUID(), username: 'Admin', password: 'Admin', role: 'admin' } ]).some(u => u.id === loggedInUser.id)) {
                     Logger.info(`Found logged in user: ${loggedInUser.username}`);
@@ -350,14 +369,61 @@ const App: React.FC = () => {
     }, []);
     
     // Persist data changes to DB
-    useEffect(() => { if (users.length > 0) dbTyped.saveUsers(users); }, [users]);
-    useEffect(() => { dbTyped.saveClients(clients); }, [clients]);
-    useEffect(() => { dbTyped.saveLookerData(lookerData); }, [lookerData]);
-    useEffect(() => { dbTyped.saveMetaApiConfig(metaApiConfig); }, [metaApiConfig]);
-    useEffect(() => { dbTyped.saveBitacoraReports(bitacoraReports); }, [bitacoraReports]);
-    useEffect(() => { dbTyped.saveUploadedVideos(uploadedVideos); }, [uploadedVideos]);
-    useEffect(() => { dbTyped.saveImportHistory(importHistory); }, [importHistory]);
-    useEffect(() => { dbTyped.savePerformanceData(performanceData); }, [performanceData]);
+    useEffect(() => { 
+        if (users.length > 0) {
+            dbTyped.saveUsers(users);
+            Logger.info(`[PERSISTENCE] Saved ${users.length} users to DB`);
+        }
+    }, [users]);
+    
+    useEffect(() => { 
+        dbTyped.saveClients(clients);
+        Logger.info(`[PERSISTENCE] Saved ${clients.length} clients to DB`);
+    }, [clients]);
+    
+    useEffect(() => { 
+        dbTyped.saveLookerData(lookerData);
+        Logger.info(`[PERSISTENCE] Saved Looker data for ${Object.keys(lookerData).length} clients to DB`);
+    }, [lookerData]);
+    
+    useEffect(() => { 
+        if (metaApiConfig) dbTyped.saveMetaApiConfig(metaApiConfig);
+    }, [metaApiConfig]);
+    
+    useEffect(() => { 
+        dbTyped.saveBitacoraReports(bitacoraReports);
+        Logger.info(`[PERSISTENCE] Saved ${bitacoraReports.length} bitácora reports to DB`);
+    }, [bitacoraReports]);
+    
+    useEffect(() => { 
+        dbTyped.saveUploadedVideos(uploadedVideos);
+        Logger.info(`[PERSISTENCE] Saved ${uploadedVideos.length} uploaded videos to DB`);
+    }, [uploadedVideos]);
+    
+    useEffect(() => { 
+        dbTyped.saveImportHistory(importHistory);
+        Logger.info(`[PERSISTENCE] Saved ${importHistory.length} import history records to DB`);
+    }, [importHistory]);
+    
+    useEffect(() => { 
+        const recordCount = Object.values(performanceData).flat().length;
+        if (recordCount > 0 || Object.keys(performanceData).length > 0) {
+            dbTyped.savePerformanceData(performanceData)
+                .then(() => {
+                    Logger.info(`[PERSISTENCE] Successfully saved ${recordCount} performance records for ${Object.keys(performanceData).length} clients to DB`);
+                    // Debug: verificar que se guardó correctamente
+                    const clientIds = Object.keys(performanceData);
+                    if (clientIds.length > 0) {
+                        Logger.info(`[PERSISTENCE] Clients with performance data: ${clientIds.join(', ')}`);
+                    }
+                })
+                .catch((error) => {
+                    Logger.error(`[PERSISTENCE] Failed to save performance data:`, error);
+                });
+        } else {
+            Logger.warn(`[PERSISTENCE] No performance data to save (${recordCount} records, ${Object.keys(performanceData).length} clients)`);
+        }
+    }, [performanceData]);
 
     // --- LOGIC ---
     
@@ -561,6 +627,176 @@ ${demographicSummary || '  - No disponible'}
         }
     }, []);
 
+    // Función de análisis estratégico integral
+    const getStrategicAnalysis = useCallback(async (clientData: any): Promise<StrategicAnalysisResult> => {
+        if (!process.env.API_KEY) {
+            throw new Error("API Key de Gemini no configurada");
+        }
+        
+        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+        // Crear contexto detallado con todos los creativos y métricas
+        const creativesContext = clientData.creativeSummaries.map((creative: any) => `
+## CREATIVO: ${creative.adName}
+
+**Descripción del Creativo:**
+${creative.creativeDescription}
+
+**Análisis de IA del Creativo:**
+- Efectividad: ${creative.analysisResult.effectivenessScore}/100 - ${creative.analysisResult.effectivenessJustification}
+- Claridad: ${creative.analysisResult.clarityScore}/100 - ${creative.analysisResult.clarityJustification}
+- Ratio Texto/Imagen: ${creative.analysisResult.textToImageRatio}% - ${creative.analysisResult.textToImageRatioJustification}
+- Etapa del Funnel: ${creative.analysisResult.funnelStage} - ${creative.analysisResult.funnelStageJustification}
+
+**Recomendaciones del Análisis de IA:**
+${creative.analysisResult.recommendations.map((rec: any) => `
+- ${rec.headline}: ${rec.points.join('. ')}`).join('')}
+
+**Métricas de Rendimiento:**
+- Gasto: ${clientData.client.currency} ${creative.performanceData.spend.toLocaleString()}
+- Ingresos: ${clientData.client.currency} ${creative.performanceData.revenue.toLocaleString()}
+- ROAS: ${creative.performanceData.roas.toFixed(2)}
+- Impresiones: ${creative.performanceData.impressions.toLocaleString()}
+- CTR: ${creative.performanceData.ctr.toFixed(2)}%
+- CPC: ${clientData.client.currency} ${creative.performanceData.cpc.toFixed(2)}
+- Compras: ${creative.performanceData.purchases}
+
+**Insights Clave Identificados:**
+${creative.keyInsights.map((insight: string) => `- ${insight}`).join('\n')}
+        `).join('\n\n');
+
+        const prompt = `
+**INSTRUCCIÓN MAESTRA:**
+Actúas como un Director de Estrategia Digital Senior especializado en Meta Ads. Tu tarea es realizar un **análisis estratégico integral** combinando el análisis detallado de creativos por IA con las métricas de rendimiento reales para generar un plan de acción estratégico específico y accionable.
+
+**CONTEXTO DEL CLIENTE:**
+- **Cliente:** ${clientData.client.name}
+- **Período Analizado:** ${clientData.dateRange.start} al ${clientData.dateRange.end}
+- **Moneda:** ${clientData.client.currency}
+
+**MÉTRICAS GENERALES DE LA CUENTA:**
+- **Gasto Total:** ${clientData.client.currency} ${clientData.performanceMetrics.totalSpend.toLocaleString()}
+- **Ingresos Totales:** ${clientData.client.currency} ${clientData.performanceMetrics.totalRevenue.toLocaleString()}
+- **ROAS General:** ${clientData.performanceMetrics.overallROAS.toFixed(2)}
+- **Mejores Anuncios:** ${clientData.performanceMetrics.bestPerformingAds.join(', ')}
+- **Peores Anuncios:** ${clientData.performanceMetrics.worstPerformingAds.join(', ')}
+- **Tendencia del Período:** ${clientData.performanceMetrics.trendAnalysis}
+
+**ANÁLISIS DETALLADO POR CREATIVO:**
+${creativesContext}
+
+**TAREAS DE ANÁLISIS ESTRATÉGICO:**
+
+1. **RESUMEN EJECUTIVO:** 
+   Proporciona un análisis ejecutivo que integre los hallazgos del análisis de creativos por IA con las métricas de rendimiento. Identifica patrones, correlaciones entre calidad creativa y rendimiento, y oportunidades principales.
+
+2. **PLAN DE ACCIÓN ESTRATÉGICO:**
+   Desarrolla entre 4-6 acciones estratégicas priorizadas que combinen:
+   - Optimizaciones de creativos basadas en el análisis de IA
+   - Ajustes de presupuesto basados en rendimiento
+   - Recomendaciones de targeting y placement
+   - Estrategias de escalado o pausa
+
+3. **INSIGHTS DE CREATIVOS:**
+   Para cada creativo analizado, proporciona un insight específico que conecte el análisis de IA con el rendimiento real, y una recomendación accionable.
+
+4. **RECOMENDACIONES DE RENDIMIENTO:**
+   Proporciona recomendaciones categorizadas para mejorar el rendimiento general de la cuenta.
+
+**CRITERIOS DE CALIDAD:**
+- Todas las recomendaciones deben ser **específicas y accionables**
+- Prioriza basándote en **impacto potencial vs esfuerzo requerido**
+- Conecta siempre el **análisis cualitativo (IA) con datos cuantitativos (métricas)**
+- Proporciona **timelines realistas** para implementación
+- Considera el **contexto del negocio** y objetivos del cliente
+
+Responde ÚNICAMENTE en formato JSON estructurado según el esquema proporcionado.
+        `;
+
+        const strategicAnalysisSchema = {
+            type: Type.OBJECT,
+            properties: {
+                executiveSummary: {
+                    type: Type.STRING,
+                    description: 'Resumen ejecutivo que integra análisis de creativos con métricas de rendimiento'
+                },
+                actionPlan: {
+                    type: Type.ARRAY,
+                    items: {
+                        type: Type.OBJECT,
+                        properties: {
+                            title: { type: Type.STRING },
+                            description: { type: Type.STRING },
+                            priority: { type: Type.STRING, enum: ['HIGH', 'MEDIUM', 'LOW'] },
+                            expectedImpact: { type: Type.STRING },
+                            timeline: { type: Type.STRING },
+                            resources: { type: Type.ARRAY, items: { type: Type.STRING } }
+                        },
+                        required: ['title', 'description', 'priority', 'expectedImpact', 'timeline', 'resources']
+                    }
+                },
+                creativeInsights: {
+                    type: Type.ARRAY,
+                    items: {
+                        type: Type.OBJECT,
+                        properties: {
+                            adName: { type: Type.STRING },
+                            insight: { type: Type.STRING },
+                            recommendation: { type: Type.STRING },
+                            impactLevel: { type: Type.STRING, enum: ['HIGH', 'MEDIUM', 'LOW'] }
+                        },
+                        required: ['adName', 'insight', 'recommendation', 'impactLevel']
+                    }
+                },
+                performanceRecommendations: {
+                    type: Type.ARRAY,
+                    items: {
+                        type: Type.OBJECT,
+                        properties: {
+                            category: { type: Type.STRING, enum: ['BUDGET', 'TARGETING', 'CREATIVE', 'BIDDING', 'PLACEMENT'] },
+                            recommendation: { type: Type.STRING },
+                            expectedImpact: { type: Type.STRING },
+                            priority: { type: Type.STRING, enum: ['HIGH', 'MEDIUM', 'LOW'] }
+                        },
+                        required: ['category', 'recommendation', 'expectedImpact', 'priority']
+                    }
+                },
+                keyFindings: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING }
+                },
+                nextSteps: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING }
+                }
+            },
+            required: ['executiveSummary', 'actionPlan', 'creativeInsights', 'performanceRecommendations', 'keyFindings', 'nextSteps']
+        };
+
+        try {
+            const response = await ai.models.generateContent({
+                model: "gemini-2.5-flash",
+                contents: { parts: [{ text: prompt }] },
+                config: {
+                    responseMimeType: "application/json",
+                    responseSchema: strategicAnalysisSchema,
+                },
+            });
+
+            if (!response.text) {
+                throw new Error("La respuesta de la IA para el análisis estratégico está vacía.");
+            }
+
+            const jsonText = response.text.trim().replace(/^```json\n?/, '').replace(/```$/, '');
+            return JSON.parse(jsonText) as StrategicAnalysisResult;
+
+        } catch (error) {
+            console.error("Error en el análisis estratégico por IA:", error);
+            const errorMessage = error instanceof Error ? error.message : "Ocurrió un error desconocido.";
+            throw new Error(`Error al generar el análisis estratégico: ${errorMessage}`);
+        }
+    }, []);
+
     const handleSyncFromMeta = async (clientId: string) => {
         if (!metaApiConfig) {
             alert("La configuración de la API de Meta no está definida.");
@@ -628,7 +864,13 @@ ${demographicSummary || '  - No disponible'}
     };
 
     const handleLogin = (username: string, pass: string): boolean => {
+        console.log('=== HANDLE LOGIN DEBUG ===');
+        console.log('Available users:', users);
+        console.log('Searching for user:', { username, pass });
+        
         const foundUser = users.find(u => u.username === username && u.password === pass);
+        console.log('Found user:', foundUser);
+        
         if (foundUser) {
             Logger.success(`User login successful: ${username}`);
             setCurrentUser(foundUser);
@@ -637,6 +879,7 @@ ${demographicSummary || '  - No disponible'}
             return true;
         }
         Logger.warn(`User login failed for username: ${username}`);
+        console.log('Login failed - no matching user found');
         return false;
     };
 
@@ -651,38 +894,76 @@ ${demographicSummary || '  - No disponible'}
     const renderMainContent = () => {
         if (isLoading) {
              return (
-                <div className="fixed inset-0 bg-brand-bg flex items-center justify-center z-50">
-                    <div className="flex flex-col items-center gap-4">
-                         <svg className="animate-spin h-10 w-10 text-brand-primary" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                        <p className="text-lg font-semibold text-brand-text">Cargando aplicación...</p>
+                <div className="fixed inset-0 bg-gradient-to-br from-brand-bg via-brand-bg to-slate-900 flex items-center justify-center z-50">
+                    <div className="flex flex-col items-center gap-6">
+                        <div className="relative">
+                            <div className="w-16 h-16 border-4 border-brand-primary/30 rounded-full animate-pulse"></div>
+                            <div className="absolute inset-0 w-16 h-16 border-4 border-transparent border-t-brand-primary rounded-full animate-spin"></div>
+                        </div>
+                        <div className="text-center space-y-2">
+                            <p className="text-xl font-bold text-brand-text animate-pulse">Creative Assistant</p>
+                            <p className="text-sm text-brand-text-secondary">Inicializando sistema de análisis IA...</p>
+                        </div>
+                        <div className="flex gap-1">
+                            <div className="w-2 h-2 bg-brand-primary rounded-full animate-bounce" style={{animationDelay: '0ms'}}></div>
+                            <div className="w-2 h-2 bg-brand-primary rounded-full animate-bounce" style={{animationDelay: '150ms'}}></div>
+                            <div className="w-2 h-2 bg-brand-primary rounded-full animate-bounce" style={{animationDelay: '300ms'}}></div>
+                        </div>
                     </div>
                 </div>
             )
         }
         
         return (
-             <div className="min-h-screen text-brand-text p-4 sm:p-6 lg:p-8">
-                <Navbar 
-                    currentView={mainView}
-                    onNavigate={setMainView}
-                    currentUser={currentUser!}
-                    onLogout={handleLogout}
-                />
+             <div className="min-h-screen bg-gradient-to-br from-brand-bg via-slate-900 to-brand-bg text-brand-text relative overflow-hidden">
+                {/* Background Pattern */}
+                <div className="absolute inset-0 opacity-5">
+                    <div className="absolute inset-0" style={{
+                        backgroundImage: `radial-gradient(circle at 25% 25%, rgba(59, 130, 246, 0.3) 0%, transparent 50%),
+                                         radial-gradient(circle at 75% 75%, rgba(139, 92, 246, 0.3) 0%, transparent 50%)`
+                    }}></div>
+                </div>
                 
-                {mainView === 'creative_analysis' && <CreativeAnalysisView clients={visibleClients} getFormatAnalysis={getFormatAnalysis} />}
-                {mainView === 'performance' && <PerformanceView clients={visibleClients} getPerformanceAnalysis={getPerformanceAnalysis} getFormatAnalysis={getFormatAnalysis} lookerData={lookerData} setLookerData={setLookerData} performanceData={performanceData} uploadedVideos={uploadedVideos} setUploadedVideos={setUploadedVideos} startDate={startDate} endDate={endDate} onDateChange={(start, end) => { setStartDate(start); setEndDate(end); }} />}
-                {mainView === 'strategies' && <TrendsView clients={visibleClients} lookerData={lookerData} getTrendsAnalysis={getTrendsAnalysis} performanceData={performanceData} startDate={startDate} endDate={endDate} onDateChange={(start, end) => { setStartDate(start); setEndDate(end); }} />}
-                {mainView === 'reports' && <ReportsView clients={visibleClients} lookerData={lookerData} bitacoraReports={bitacoraReports} />}
-                {mainView === 'settings' && <SettingsView metaApiConfig={metaApiConfig} setMetaApiConfig={setMetaApiConfig} />}
-                {mainView === 'control_panel' && currentUser?.role === 'admin' && <ControlPanelView />}
-                {mainView === 'clients' && <ClientManager clients={clients} setClients={setClients} currentUser={currentUser!} />}
-                {mainView === 'import' && currentUser?.role === 'admin' && <ImportView clients={clients} setClients={setClients} lookerData={lookerData} setLookerData={setLookerData} performanceData={performanceData} setPerformanceData={setPerformanceData} bitacoraReports={bitacoraReports} setBitacoraReports={setBitacoraReports} onSyncFromMeta={handleSyncFromMeta} metaApiConfig={metaApiConfig} currentUser={currentUser} />}
-                {mainView === 'users' && currentUser?.role === 'admin' && <UserManager users={users} setUsers={setUsers} currentUser={currentUser!} />}
-                {mainView === 'help' && <HelpView />}
-                {mainView === 'logs' && currentUser?.role === 'admin' && <LogView />}
+                {/* Animated Background Elements */}
+                <div className="absolute top-10 left-10 w-32 h-32 bg-brand-primary/10 rounded-full blur-3xl animate-pulse"></div>
+                <div className="absolute bottom-10 right-10 w-40 h-40 bg-brand-accent/10 rounded-full blur-3xl animate-pulse" style={{animationDelay: '1s'}}></div>
+                
+                <div className="relative z-10">
+                    <div className="animate-slide-down">
+                        <Navbar 
+                            currentView={mainView}
+                            onNavigate={setMainView}
+                            currentUser={currentUser!}
+                            onLogout={handleLogout}
+                            onOpenDiagnostics={() => setIsDiagnosticsOpen(true)}
+                        />
+                    </div>
+                    
+                    <main className="animate-fade-in pt-24 lg:pt-20 px-4 sm:px-6 lg:px-8 pb-8">
+                        {mainView === 'creative_analysis' && <CreativeAnalysisView clients={visibleClients} getFormatAnalysis={getFormatAnalysis} />}
+                        {mainView === 'performance' && <PerformanceView clients={visibleClients} getPerformanceAnalysis={getPerformanceAnalysis} getFormatAnalysis={getFormatAnalysis} lookerData={lookerData} setLookerData={setLookerData} performanceData={performanceData} uploadedVideos={uploadedVideos} setUploadedVideos={setUploadedVideos} startDate={startDate} endDate={endDate} onDateChange={(start, end) => { setStartDate(start); setEndDate(end); }} />}
+                        {mainView === 'strategies' && <TrendsView clients={visibleClients} lookerData={lookerData} getTrendsAnalysis={getTrendsAnalysis} performanceData={performanceData} startDate={startDate} endDate={endDate} onDateChange={(start, end) => { setStartDate(start); setEndDate(end); }} />}
+                        {mainView === 'strategic_analysis' && <StrategicAnalysisView clients={visibleClients} lookerData={lookerData} performanceData={performanceData} getStrategicAnalysis={getStrategicAnalysis} startDate={startDate} endDate={endDate} onDateChange={(start, end) => { setStartDate(start); setEndDate(end); }} />}
+                        {mainView === 'reports' && <ReportsView clients={visibleClients} lookerData={lookerData} bitacoraReports={bitacoraReports} />}
+                        {mainView === 'settings' && <SettingsView metaApiConfig={metaApiConfig} setMetaApiConfig={setMetaApiConfig} />}
+                        {mainView === 'control_panel' && currentUser?.role === 'admin' && <ControlPanelView />}
+                        {mainView === 'clients' && <ClientManager clients={clients} setClients={setClients} currentUser={currentUser!} />}
+                        {mainView === 'import' && currentUser?.role === 'admin' && <ImportView clients={clients} setClients={setClients} lookerData={lookerData} setLookerData={setLookerData} performanceData={performanceData} setPerformanceData={setPerformanceData} bitacoraReports={bitacoraReports} setBitacoraReports={setBitacoraReports} onSyncFromMeta={handleSyncFromMeta} metaApiConfig={metaApiConfig} currentUser={currentUser} />}
+                        {mainView === 'users' && currentUser?.role === 'admin' && <UserManager users={users} setUsers={setUsers} currentUser={currentUser!} />}
+                        {mainView === 'help' && <HelpView />}
+                        {mainView === 'logs' && currentUser?.role === 'admin' && <LogView />}
+                    </main>
+                </div>
+                
+                {/* Modal de Diagnóstico de Datos */}
+                <DataDiagnosticsModal 
+                    isOpen={isDiagnosticsOpen}
+                    onClose={() => setIsDiagnosticsOpen(false)}
+                    clients={clients}
+                    performanceData={performanceData}
+                    lookerData={lookerData}
+                    importHistory={importHistory}
+                />
             </div>
         )
     }

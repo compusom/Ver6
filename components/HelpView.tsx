@@ -32,6 +32,7 @@ const AccordionItem: React.FC<{ title: string; children: React.ReactNode; defaul
 
 export const HelpView: React.FC = () => {
     const P = ({ children }: { children: React.ReactNode }) => <p>{children}</p>;
+    const H3 = ({ children }: { children: React.ReactNode }) => <h3 className="text-lg font-semibold text-brand-text mt-4 mb-2">{children}</h3>;
     const UL = ({ children }: { children: React.ReactNode }) => <ul className="list-disc list-outside ml-5 space-y-2">{children}</ul>;
     const OL = ({ children }: { children: React.ReactNode }) => <ol className="list-decimal list-outside ml-5 space-y-2">{children}</ol>;
     const LI = ({ children }: { children: React.ReactNode }) => <li>{children}</li>;
@@ -89,7 +90,50 @@ export const HelpView: React.FC = () => {
                     </UL>
                 </AccordionItem>
                 
-                <AccordionItem title="4. Funciones de Administrador">
+                <AccordionItem title="4. Análisis Estratégico Integral (NUEVO)">
+                    <P>La funcionalidad más avanzada que combina el análisis de creativos por IA con métricas de rendimiento para generar un plan de acción estratégico completo.</P>
+                    
+                    <H3>📋 ¿Qué es el Análisis Estratégico Integral?</H3>
+                    <P>Esta funcionalidad toma todos los creativos que ya analizaste con IA, los combina con los datos de rendimiento importados, y genera un <B>plan estratégico completo</B> usando IA avanzada.</P>
+                    
+                    <H3>🎯 Requisitos Previos</H3>
+                    <UL>
+                        <LI><B>Creativos Analizados:</B> Debes tener creativos analizados por IA en la pestaña "Análisis de Creativos"</LI>
+                        <LI><B>Datos de Rendimiento:</B> Debes haber importado datos de rendimiento (archivos XLSX de Meta)</LI>
+                        <LI><B>Datos Vinculados:</B> Los creativos deben estar correctamente vinculados con los datos de rendimiento</LI>
+                    </UL>
+                    
+                    <H3>🚀 Cómo Usar</H3>
+                    <OL>
+                        <LI><B>Ve a "Plan Estratégico"</B> en el menú principal</LI>
+                        <LI><B>Selecciona un Cliente:</B> Solo aparecerán clientes que tengan creativos analizados Y datos de rendimiento</LI>
+                        <LI><B>Selecciona Período:</B> Ajusta las fechas para el análisis</LI>
+                        <LI><B>Genera Análisis:</B> Haz clic en "Generar Análisis Estratégico"</LI>
+                        <LI><B>Revisa el Plan:</B> La IA generará un plan completo con acciones priorizadas</LI>
+                    </OL>
+                    
+                    <H3>📊 ¿Qué Obtienes?</H3>
+                    <UL>
+                        <LI><B>Resumen Ejecutivo:</B> Análisis holístico que conecta calidad de creativos con rendimiento real</LI>
+                        <LI><B>Plan de Acción:</B> 4-6 acciones estratégicas priorizadas (Alta/Media/Baja prioridad) con timelines e impacto esperado</LI>
+                        <LI><B>Insights por Creativo:</B> Conexión específica entre el análisis de IA y rendimiento de cada anuncio</LI>
+                        <LI><B>Recomendaciones de Rendimiento:</B> Categorizadas por Presupuesto, Targeting, Creativos, Pujas y Placements</LI>
+                    </UL>
+                    
+                    <H3>💡 Ejemplo de Análisis</H3>
+                    <P>La IA podría generar algo como:</P>
+                    <P><B>"Los creativos con puntuaciones de efectividad superiores a 70 están generando un ROAS 40% más alto. Recomiendo escalar el presupuesto del 'Summer Glow Campaign' en un 50% y optimizar los 2 creativos con problemas en zonas seguras para Stories."</B></P>
+                    
+                    <H3>🎯 Casos de Uso</H3>
+                    <UL>
+                        <LI><B>Reportes para Clientes:</B> Genera reportes ejecutivos completos</LI>
+                        <LI><B>Optimización Guiada:</B> Sigue un plan paso a paso basado en datos reales</LI>
+                        <LI><B>Priorización:</B> Entiende qué acciones tendrán mayor impacto</LI>
+                        <LI><B>Correlaciones:</B> Descubre patrones entre calidad creativa y rendimiento</LI>
+                    </UL>
+                </AccordionItem>
+                
+                <AccordionItem title="5. Funciones de Administrador">
                     <P>Si tienes rol de <B>Admin</B>, tienes acceso a vistas y funciones adicionales:</P>
                     <UL>
                         <LI><B>Importar:</B> Permite subir el reporte maestro XLSX con datos de todas las cuentas.</LI>

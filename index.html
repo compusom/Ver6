@@ -5,20 +5,69 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Meta Ads Creative Assistant</title>
+    <title>Creative Assistant - AI Marketing Intelligence Platform</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
       tailwind.config = {
         theme: {
           extend: {
             colors: {
-              'brand-bg': '#111827',
-              'brand-surface': '#1F2937',
-              'brand-border': '#374151',
-              'brand-text': '#F9FAFB',
-              'brand-text-secondary': '#9CA3AF',
+              'brand-bg': '#0F172A',
+              'brand-surface': '#1E293B',
+              'brand-border': '#334155',
+              'brand-text': '#F8FAFC',
+              'brand-text-secondary': '#94A3B8',
               'brand-primary': '#3B82F6',
               'brand-primary-hover': '#2563EB',
+              'brand-accent': '#8B5CF6',
+              'brand-accent-hover': '#7C3AED',
+              'brand-success': '#10B981',
+              'brand-warning': '#F59E0B',
+              'brand-error': '#EF4444',
+            },
+            animation: {
+              'fade-in': 'fadeIn 0.3s ease-out',
+              'slide-up': 'slideUp 0.3s ease-out',
+              'slide-down': 'slideDown 0.3s ease-out',
+              'scale-in': 'scaleIn 0.2s ease-out',
+              'bounce-subtle': 'bounceSubtle 0.6s ease-out',
+              'glow': 'glow 2s ease-in-out infinite alternate',
+            },
+            keyframes: {
+              fadeIn: {
+                '0%': { opacity: '0', transform: 'translateY(-10px)' },
+                '100%': { opacity: '1', transform: 'translateY(0)' }
+              },
+              slideUp: {
+                '0%': { opacity: '0', transform: 'translateY(20px)' },
+                '100%': { opacity: '1', transform: 'translateY(0)' }
+              },
+              slideDown: {
+                '0%': { opacity: '0', transform: 'translateY(-20px)' },
+                '100%': { opacity: '1', transform: 'translateY(0)' }
+              },
+              scaleIn: {
+                '0%': { opacity: '0', transform: 'scale(0.95)' },
+                '100%': { opacity: '1', transform: 'scale(1)' }
+              },
+              bounceSubtle: {
+                '0%, 20%, 53%, 80%, 100%': { transform: 'translate3d(0,0,0)' },
+                '40%, 43%': { transform: 'translate3d(0, -15px, 0)' },
+                '70%': { transform: 'translate3d(0, -7px, 0)' },
+                '90%': { transform: 'translate3d(0, -2px, 0)' }
+              },
+              glow: {
+                '0%': { boxShadow: '0 0 5px rgba(59, 130, 246, 0.5)' },
+                '100%': { boxShadow: '0 0 20px rgba(59, 130, 246, 0.8), 0 0 30px rgba(59, 130, 246, 0.6)' }
+              }
+            },
+            backdropBlur: {
+              'xs': '2px',
+            },
+            boxShadow: {
+              'glow': '0 0 15px rgba(59, 130, 246, 0.4)',
+              'glow-lg': '0 0 25px rgba(59, 130, 246, 0.6)',
+              'inner-glow': 'inset 0 0 10px rgba(59, 130, 246, 0.3)',
             }
           }
         }

@@ -106,9 +106,44 @@ export const ControlPanelView: React.FC = () => {
                                     ONLINE
                                 </div>
                             ) : (
-                                <div className="flex items-center gap-2 text-yellow-400 font-bold bg-yellow-500/20 px-3 py-1 rounded-full text-sm">
-                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
-                                    OFFLINE
+                                <div className="flex items-center gap-2">
+                                    <span className="text-yellow-400 font-bold bg-yellow-500/20 px-3 py-1 rounded-full text-sm flex items-center gap-2">
+                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                                        OFFLINE
+                                    </span>
+                                    <button
+                                        className="ml-2 px-3 py-1 bg-green-500/20 text-green-400 rounded text-sm hover:bg-green-500/30 font-bold"
+                                        disabled={!!loading[table.key]}
+                                        onClick={async () => {
+                                            setLoading(l => ({ ...l, [table.key]: true }));
+                                            addLog(`> Intentando crear la tabla '${table.name}'...`);
+                                            try {
+                                                if (table.key === 'performance_data') {
+                                                    await db.update('performance_data', {});
+                                                } else if (table.key === 'clients') {
+                                                    await db.update('clients', []);
+                                                } else if (table.key === 'users') {
+                                                    await db.update('users', []);
+                                                } else if (table.key === 'looker_data') {
+                                                    await db.update('looker_data', {});
+                                                } else if (table.key === 'bitacora_reports') {
+                                                    await db.update('bitacora_reports', []);
+                                                } else if (table.key === 'uploaded_videos') {
+                                                    await db.update('uploaded_videos', []);
+                                                } else if (table.key === 'import_history') {
+                                                    await db.update('import_history', []);
+                                                } else if (table.key === 'processed_files_hashes') {
+                                                    await db.update('processed_files_hashes', {});
+                                                }
+                                                addLog(`✅ Tabla '${table.name}' creada correctamente.`);
+                                                await checkTableStatus();
+                                            } catch (e) {
+                                                addLog(`❌ Error creando la tabla '${table.name}': ${e instanceof Error ? e.message : String(e)}`);
+                                                alert('Error creando la tabla. Ver log.');
+                                            }
+                                            setLoading(l => ({ ...l, [table.key]: false }));
+                                        }}
+                                    >Crear tabla</button>
                                 </div>
                             )}
                         </div>

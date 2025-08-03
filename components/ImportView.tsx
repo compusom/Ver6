@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, JSX } from 'react';
 import { Client, PerformanceRecord, AllLookerData, BitacoraReport, ImportBatch, MetaApiConfig, User, LookerProcessResult, ProcessResult } from '../types';
 import { NewClientsModal } from './NewClientsModal';
 import { dbTyped } from '../database';
@@ -7,6 +7,7 @@ import { parseBitacoraReport } from '../lib/txtReportParser';
 import { ClientSelectorModal } from './ClientSelectorModal';
 import { ImportHistory } from './ImportHistory';
 import { processPerformanceData, processLookerData } from '../lib/dataProcessor';
+import { mcpConnector } from '../lib/mcpConnector';
 
 const getFileHash = async (file: File): Promise<string> => {
     const buffer = await file.arrayBuffer();
@@ -99,7 +100,9 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
             const newData = { ...current };
             results.forEach(({ client, records }) => {
                 newData[client.id] = [...(newData[client.id] || []), ...records];
+                console.log(`[IMPORT] Added ${records.length} records for client ${client.name} (${client.id})`);
             });
+            console.log(`[IMPORT] New performance data structure:`, Object.keys(newData).map(clientId => `${clientId}: ${newData[clientId].length} records`));
             return newData;
         });
         
@@ -107,6 +110,25 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
         if (totalNewRecords === 0) {
             setFeedback({ type: 'info', message: 'Importación completada. No se encontraron filas nuevas.' });
             return;
+        }
+
+        // Send data to MCP server for each processed result
+        for (const result of results) {
+            if (result.newRecordsCount > 0) {
+                try {
+                    console.log(`[MCP] Attempting to send data for client: ${result.client.name}`);
+                    const mcpSuccess = await mcpConnector.sendExcelData(result);
+                    if (mcpSuccess) {
+                        console.log(`[MCP] Successfully sent data to MCP for client: ${result.client.name}`);
+                        Logger.success(`Datos enviados al servidor MCP para cliente: ${result.client.name}`);
+                    } else {
+                        console.warn(`[MCP] Failed to send data to MCP for client: ${result.client.name}`);
+                    }
+                } catch (error) {
+                    console.error(`[MCP] Error sending data to MCP for client ${result.client.name}:`, error);
+                    // Don't fail the entire import if MCP fails, just log it
+                }
+            }
         }
 
         // Aggregate feedback from all results
@@ -123,7 +145,10 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
             periodMessage = ` Período detectado: ${minDate.toLocaleDateString('es-ES')} - ${maxDate.toLocaleDateString('es-ES')} (${daysDetected} días).`
         }
 
-        setFeedback({ type: 'success', message: `Importación completada. ${totalNewRecords} nuevas filas añadidas para: ${clientNames}.${periodMessage}` });
+        setFeedback({ 
+            type: 'success', 
+            message: `Importación completada. ${totalNewRecords} nuevas filas añadidas para: ${clientNames}.${periodMessage} ${mcpConnector.getConfig() ? '✅ Datos enviados al MCP' : '⚠️ MCP no configurado'}` 
+        });
 
         const newHashes = { ...processedHashes };
         for (const result of results) {
