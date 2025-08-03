@@ -1,0 +1,543 @@
+/**
+ * Ver6 Local Server - Servidor local para persistencia de datos
+ * 
+ * Este servidor proporciona APIs REST para almacenar datos localmente
+ * usando SQLite, permitiendo acceso desde cualquier navegador.
+ * 
+ * Características:
+ * - Base de datos SQLite local (ver6_data.db)
+ * - APIs REST para CRUD operations
+ * - CORS habilitado para desarrollo
+ * - Manejo de archivos y configuraciones
+ * - Compatible con el sistema frontend existente
+ */
+
+import express from 'express';
+import cors from 'cors';
+import multer from 'multer';
+import Database from 'better-sqlite3';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+import fs from 'fs';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+const app = express();
+const PORT = 3001;
+
+// Database setup
+const dbPath = join(__dirname, 'ver6_data.db');
+const db = new Database(dbPath);
+
+// Middleware
+app.use(cors());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// File upload configuration
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        const uploadDir = join(__dirname, 'uploads');
+        if (!fs.existsSync(uploadDir)) {
+            fs.mkdirSync(uploadDir, { recursive: true });
+        }
+        cb(null, uploadDir);
+    },
+    filename: (req, file, cb) => {
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        cb(null, `${timestamp}-${file.originalname}`);
+    }
+});
+const upload = multer({ storage });
+
+// Initialize database tables
+function initializeDatabase() {
+    console.log('[Server] Initializing SQLite database...');
+    
+    // Table for general key-value storage
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS app_data (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            table_name TEXT NOT NULL,
+            data_key TEXT,
+            data_value TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(table_name, data_key)
+        )
+    `);
+
+    // Table for performance records
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS performance_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id TEXT NOT NULL,
+            record_data TEXT NOT NULL,
+            batch_id TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+
+    // Table for clients
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS clients (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            data TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+
+    // Table for creative data
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS creative_data (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id TEXT NOT NULL,
+            creative_data TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+
+    // Table for import history
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS import_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            batch_data TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+
+    console.log('[Server] ✅ Database tables initialized');
+}
+
+// Initialize database on startup
+initializeDatabase();
+
+// ==================== API ROUTES ====================
+
+/**
+ * Health check endpoint
+ */
+app.get('/api/health', (req, res) => {
+    res.json({ 
+        status: 'ok', 
+        timestamp: new Date().toISOString(),
+        database: dbPath,
+        message: 'Ver6 Local Server is running'
+    });
+});
+
+/**
+ * Save data to a table
+ */
+app.post('/api/data/:table', (req, res) => {
+    try {
+        const { table } = req.params;
+        const { data, key = null } = req.body;
+
+        console.log(`[Server] Saving data to table: ${table}, key: ${key}`);
+        
+        const stmt = db.prepare(`
+            INSERT OR REPLACE INTO app_data (table_name, data_key, data_value, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        `);
+        
+        const result = stmt.run(table, key, JSON.stringify(data));
+        
+        console.log(`[Server] ✅ Saved data to ${table}, row ID: ${result.lastInsertRowid}`);
+        
+        res.json({ 
+            success: true, 
+            table,
+            key,
+            rowId: result.lastInsertRowid,
+            message: 'Data saved successfully'
+        });
+        
+    } catch (error) {
+        console.error('[Server] Error saving data:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+});
+
+/**
+ * Get data from a table
+ */
+app.get('/api/data/:table', (req, res) => {
+    try {
+        const { table } = req.params;
+        const { key } = req.query;
+
+        console.log(`[Server] Loading data from table: ${table}, key: ${key}`);
+        
+        let stmt, rows;
+        
+        if (key) {
+            // Get specific key
+            stmt = db.prepare('SELECT * FROM app_data WHERE table_name = ? AND data_key = ?');
+            rows = stmt.get(table, key);
+            
+            if (rows) {
+                const data = JSON.parse(rows.data_value);
+                console.log(`[Server] ✅ Found data for ${table}/${key}`);
+                res.json({ success: true, data, metadata: { created_at: rows.created_at, updated_at: rows.updated_at } });
+            } else {
+                console.log(`[Server] No data found for ${table}/${key}`);
+                res.json({ success: true, data: null });
+            }
+        } else {
+            // Get all data for table
+            stmt = db.prepare('SELECT * FROM app_data WHERE table_name = ?');
+            rows = stmt.all(table);
+            
+            const result = {};
+            rows.forEach(row => {
+                const key = row.data_key || 'default';
+                result[key] = JSON.parse(row.data_value);
+            });
+            
+            console.log(`[Server] ✅ Found ${rows.length} records for ${table}`);
+            res.json({ success: true, data: result, count: rows.length });
+        }
+        
+    } catch (error) {
+        console.error('[Server] Error loading data:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+});
+
+/**
+ * Delete data from a table
+ */
+app.delete('/api/data/:table', (req, res) => {
+    try {
+        const { table } = req.params;
+        const { key } = req.query;
+
+        console.log(`[Server] Deleting data from table: ${table}, key: ${key}`);
+        
+        let stmt, result;
+        
+        if (key) {
+            stmt = db.prepare('DELETE FROM app_data WHERE table_name = ? AND data_key = ?');
+            result = stmt.run(table, key);
+        } else {
+            stmt = db.prepare('DELETE FROM app_data WHERE table_name = ?');
+            result = stmt.run(table);
+        }
+        
+        console.log(`[Server] ✅ Deleted ${result.changes} records from ${table}`);
+        
+        res.json({ 
+            success: true, 
+            deletedCount: result.changes,
+            message: `Deleted ${result.changes} records`
+        });
+        
+    } catch (error) {
+        console.error('[Server] Error deleting data:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+});
+
+/**
+ * Save clients data
+ */
+app.post('/api/clients', (req, res) => {
+    try {
+        const { clients } = req.body;
+        
+        console.log(`[Server] Saving ${clients.length} clients`);
+        
+        const stmt = db.prepare(`
+            INSERT OR REPLACE INTO clients (id, name, data, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        `);
+        
+        const transaction = db.transaction(() => {
+            for (const client of clients) {
+                stmt.run(client.id, client.name, JSON.stringify(client));
+            }
+        });
+        
+        transaction();
+        
+        console.log(`[Server] ✅ Saved ${clients.length} clients`);
+        
+        res.json({ 
+            success: true, 
+            count: clients.length,
+            message: 'Clients saved successfully'
+        });
+        
+    } catch (error) {
+        console.error('[Server] Error saving clients:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+});
+
+/**
+ * Get all clients
+ */
+app.get('/api/clients', (req, res) => {
+    try {
+        const stmt = db.prepare('SELECT * FROM clients ORDER BY updated_at DESC');
+        const rows = stmt.all();
+        
+        const clients = rows.map(row => JSON.parse(row.data));
+        
+        console.log(`[Server] ✅ Retrieved ${clients.length} clients`);
+        
+        res.json({ 
+            success: true, 
+            data: clients,
+            count: clients.length
+        });
+        
+    } catch (error) {
+        console.error('[Server] Error loading clients:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+});
+
+/**
+ * Save performance records
+ */
+app.post('/api/performance/:clientId', (req, res) => {
+    try {
+        const { clientId } = req.params;
+        const { records, batchId = `batch_${Date.now()}` } = req.body;
+        
+        console.log(`[Server] Saving ${records.length} performance records for client ${clientId}`);
+        
+        const stmt = db.prepare(`
+            INSERT INTO performance_records (client_id, record_data, batch_id)
+            VALUES (?, ?, ?)
+        `);
+        
+        const transaction = db.transaction(() => {
+            for (const record of records) {
+                stmt.run(clientId, JSON.stringify(record), batchId);
+            }
+        });
+        
+        transaction();
+        
+        console.log(`[Server] ✅ Saved ${records.length} performance records for ${clientId}`);
+        
+        res.json({ 
+            success: true, 
+            clientId,
+            batchId,
+            count: records.length,
+            message: 'Performance records saved successfully'
+        });
+        
+    } catch (error) {
+        console.error('[Server] Error saving performance records:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+});
+
+/**
+ * Get performance data for all clients
+ */
+app.get('/api/performance', (req, res) => {
+    try {
+        const stmt = db.prepare(`
+            SELECT client_id, record_data 
+            FROM performance_records 
+            ORDER BY created_at DESC
+        `);
+        const rows = stmt.all();
+        
+        const performanceData = {};
+        
+        rows.forEach(row => {
+            if (!performanceData[row.client_id]) {
+                performanceData[row.client_id] = [];
+            }
+            performanceData[row.client_id].push(JSON.parse(row.record_data));
+        });
+        
+        console.log(`[Server] ✅ Retrieved performance data for ${Object.keys(performanceData).length} clients`);
+        
+        res.json({ 
+            success: true, 
+            data: performanceData,
+            clientCount: Object.keys(performanceData).length,
+            totalRecords: rows.length
+        });
+        
+    } catch (error) {
+        console.error('[Server] Error loading performance data:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+});
+
+/**
+ * File upload endpoint
+ */
+app.post('/api/upload', upload.single('file'), (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'No file uploaded' 
+            });
+        }
+        
+        console.log(`[Server] ✅ File uploaded: ${req.file.filename}`);
+        
+        res.json({
+            success: true,
+            file: {
+                originalName: req.file.originalname,
+                filename: req.file.filename,
+                path: req.file.path,
+                size: req.file.size
+            }
+        });
+        
+    } catch (error) {
+        console.error('[Server] Error uploading file:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+});
+
+/**
+ * Get database statistics
+ */
+app.get('/api/stats', (req, res) => {
+    try {
+        const tables = [
+            { name: 'app_data', query: 'SELECT COUNT(*) as count FROM app_data' },
+            { name: 'clients', query: 'SELECT COUNT(*) as count FROM clients' },
+            { name: 'performance_records', query: 'SELECT COUNT(*) as count FROM performance_records' },
+            { name: 'creative_data', query: 'SELECT COUNT(*) as count FROM creative_data' },
+            { name: 'import_history', query: 'SELECT COUNT(*) as count FROM import_history' }
+        ];
+        
+        const stats = {};
+        let totalRecords = 0;
+        
+        tables.forEach(table => {
+            const result = db.prepare(table.query).get();
+            stats[table.name] = result.count;
+            totalRecords += result.count;
+        });
+        
+        // Get database file size
+        const dbStats = fs.statSync(dbPath);
+        const dbSizeKB = Math.round(dbStats.size / 1024);
+        
+        console.log(`[Server] ✅ Database stats: ${totalRecords} total records, ${dbSizeKB}KB`);
+        
+        res.json({
+            success: true,
+            database: {
+                path: dbPath,
+                sizeKB: dbSizeKB,
+                lastModified: dbStats.mtime
+            },
+            tables: stats,
+            totalRecords
+        });
+        
+    } catch (error) {
+        console.error('[Server] Error getting stats:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+});
+
+/**
+ * Clear all data (for development/testing)
+ */
+app.post('/api/clear', (req, res) => {
+    try {
+        const tables = ['app_data', 'clients', 'performance_records', 'creative_data', 'import_history'];
+        
+        let totalDeleted = 0;
+        
+        tables.forEach(tableName => {
+            const result = db.prepare(`DELETE FROM ${tableName}`).run();
+            totalDeleted += result.changes;
+            console.log(`[Server] Cleared ${result.changes} records from ${tableName}`);
+        });
+        
+        console.log(`[Server] ✅ Cleared all data: ${totalDeleted} total records deleted`);
+        
+        res.json({
+            success: true,
+            deletedRecords: totalDeleted,
+            message: 'All data cleared successfully'
+        });
+        
+    } catch (error) {
+        console.error('[Server] Error clearing data:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+});
+
+// Start server
+app.listen(PORT, () => {
+    console.log(`\n🚀 Ver6 Local Server running on http://localhost:${PORT}`);
+    console.log(`📊 Database: ${dbPath}`);
+    console.log(`🔗 Health check: http://localhost:${PORT}/api/health`);
+    console.log(`📈 Stats: http://localhost:${PORT}/api/stats`);
+    console.log('');
+    console.log('API Endpoints:');
+    console.log('  POST /api/data/:table     - Save data');
+    console.log('  GET  /api/data/:table     - Get data');
+    console.log('  DELETE /api/data/:table   - Delete data');
+    console.log('  POST /api/clients         - Save clients');
+    console.log('  GET  /api/clients         - Get clients');
+    console.log('  POST /api/performance/:id - Save performance data');
+    console.log('  GET  /api/performance     - Get performance data');
+    console.log('  POST /api/upload          - Upload files');
+    console.log('  GET  /api/stats           - Database statistics');
+    console.log('  POST /api/clear           - Clear all data');
+    console.log('');
+});
+
+// Graceful shutdown
+process.on('SIGINT', () => {
+    console.log('\n[Server] Shutting down gracefully...');
+    db.close();
+    process.exit(0);
+});
+
+export default app;

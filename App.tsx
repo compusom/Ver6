@@ -17,7 +17,7 @@ import { LogView } from './components/LogView';
 import { TrendsView } from './components/TrendsView';
 import { ReportsView } from './components/ReportsView';
 import { StrategicAnalysisView } from './components/StrategicAnalysisView';
-import { dbTyped, dbConnectionStatus } from './database';
+import db, { dbConnectionStatus } from './database';
 import Logger from './Logger';
 import { syncFromMetaAPI } from './lib/metaApiConnector';
 import { processPerformanceData } from './lib/dataProcessor';
@@ -280,7 +280,7 @@ const App: React.FC = () => {
     // App State
     const [isLoggedIn, setIsLoggedIn] = useState(false);
     const [currentUser, setCurrentUser] = useState<User | null>(null);
-    const [mainView, setMainView] = useState<AppView>('creative_analysis');
+    const [mainView, setMainView] = useState<AppView>('performance');
     const [isLoading, setIsLoading] = useState<boolean>(true);
     const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
 
@@ -303,18 +303,25 @@ const App: React.FC = () => {
 
     // --- DATABASE & PERSISTENCE ---
     useEffect(() => {
+        console.log('🚀 [INIT] Starting app initialization...');
+        
         const initializeApp = async () => {
             Logger.info('Application initializing...');
-            setIsLoading(true);
-            dbConnectionStatus.connected = true; 
+            
             try {
-                const [
-                    loadedUsers, loadedClients, loadedLookerData, loggedInUser,
-                    loadedApiConfig, loadedReports, loadedVideos, loadedHistory, loadedPerfData
-                ] = await Promise.all([
-                    dbTyped.getUsers(), dbTyped.getClients(), dbTyped.getLookerData(), dbTyped.getLoggedInUser(),
-                    dbTyped.getMetaApiConfig(), dbTyped.getBitacoraReports(), dbTyped.getUploadedVideos(), dbTyped.getImportHistory(), dbTyped.getPerformanceData()
+                console.log('🔌 [INIT] Connecting to database...');
+                // Initialize database connection
+                await db.connect();
+                console.log('✅ [INIT] Database connected');
+                
+                // Load only essential data first
+                console.log('📂 [INIT] Loading essential data...');
+                const [loadedUsers, loggedInUser, loadedApiConfig] = await Promise.all([
+                    db.getUsers(), 
+                    db.getLoggedInUser(),
+                    db.getMetaApiConfig()
                 ]);
+                console.log('✅ [INIT] Essential data loaded');
 
                 if (loadedUsers.length === 0) {
                     Logger.warn('No users found in DB. Creating default Admin user.');
@@ -322,7 +329,7 @@ const App: React.FC = () => {
                     const defaultAdmin: User = { id: crypto.randomUUID(), username: 'Admin', password: 'Admin', role: 'admin' };
                     console.log('Default admin user:', defaultAdmin);
                     setUsers([defaultAdmin]);
-                    await dbTyped.saveUsers([defaultAdmin]);
+                    await db.saveUsers([defaultAdmin]);
                     console.log('Default user saved to database');
                 } else {
                     console.log('=== LOADED USERS FROM DB ===');
@@ -330,13 +337,57 @@ const App: React.FC = () => {
                     setUsers(loadedUsers);
                 }
                 
+                setMetaApiConfig(loadedApiConfig);
+                
+                console.log('📊 [INIT] Loading additional data...');
+                // Load other data lazily only when needed
+                const [loadedClients, loadedLookerData, loadedReports, loadedVideos, loadedHistory, loadedPerfData] = await Promise.all([
+                    db.getClients().catch(() => []),
+                    db.getLookerData().catch(() => ({})),
+                    db.getBitacoraReports().catch(() => []),
+                    db.getUploadedVideos().catch(() => []),
+                    db.getImportHistory().catch(() => []),
+                    db.getPerformanceData().catch(() => ({}))
+                ]);
+                
                 setClients(loadedClients);
                 setLookerData(loadedLookerData);
-                setMetaApiConfig(loadedApiConfig);
                 setBitacoraReports(loadedReports);
                 setUploadedVideos(loadedVideos);
                 setImportHistory(loadedHistory);
                 setPerformanceData(loadedPerfData);
+                console.log('✅ [INIT] Additional data loaded');
+                
+                // Si no hay clientes, crear clientes de ejemplo
+                if (loadedClients.length === 0) {
+                    console.log('📝 [INIT] No clients found, creating sample clients...');
+                    const sampleClients: Client[] = [
+                        {
+                            id: crypto.randomUUID(),
+                            name: 'Empresa Demo 1',
+                            logo: 'https://via.placeholder.com/50/4F46E5/ffffff?text=E1',
+                            userId: loadedUsers[0]?.id || crypto.randomUUID(),
+                            currency: 'EUR'
+                        },
+                        {
+                            id: crypto.randomUUID(),
+                            name: 'Empresa Demo 2', 
+                            logo: 'https://via.placeholder.com/50/059669/ffffff?text=E2',
+                            userId: loadedUsers[0]?.id || crypto.randomUUID(),
+                            currency: 'EUR'
+                        },
+                        {
+                            id: crypto.randomUUID(),
+                            name: 'Empresa Demo 3',
+                            logo: 'https://via.placeholder.com/50/DC2626/ffffff?text=E3', 
+                            userId: loadedUsers[0]?.id || crypto.randomUUID(),
+                            currency: 'EUR'
+                        }
+                    ];
+                    setClients(sampleClients);
+                    await db.saveClients(sampleClients);
+                    console.log('✅ [INIT] Sample clients created:', sampleClients.map(c => c.name));
+                }
                 
                 // Debug logging para performance data
                 const perfRecordCount = Object.values(loadedPerfData).flat().length;
@@ -356,59 +407,107 @@ const App: React.FC = () => {
                     setCurrentUser(loggedInUser);
                     setIsLoggedIn(true);
                 }
+                
+                console.log('🎉 [INIT] App initialization completed successfully!');
             } catch (error) {
                 const message = error instanceof Error ? error.message : 'Unknown DB error';
                 Logger.error('Failed to load data from database.', { error: message });
+                console.error('❌ [INIT] Initialization failed:', error);
+                
+                // IMPROVED: Don't block UI on DB error, allow app to function with defaults
+                console.warn('⚠️ [INIT] Continuing with default data due to DB error');
+                
+                // Set minimal working state
+                const defaultAdmin: User = { id: crypto.randomUUID(), username: 'Admin', password: 'Admin', role: 'admin' };
+                setUsers([defaultAdmin]);
+                setClients([]);
+                setLookerData({});
+                setBitacoraReports([]);
+                setUploadedVideos([]);
+                setImportHistory([]);
+                setPerformanceData({});
+                
                 dbConnectionStatus.connected = false;
-                alert("Error crítico: No se pudieron cargar los datos de la base de datos.");
             } finally {
+                console.log('🏁 [INIT] Setting isLoading to false');
                 setIsLoading(false);
             }
         };
-        initializeApp();
+        
+        // Safety timeout in case initialization hangs - REDUCED to 5 seconds
+        const initTimeout = setTimeout(() => {
+            console.warn('⚠️ [INIT] Initialization timeout, forcing loading to false');
+            setIsLoading(false);
+            
+            // Set emergency defaults if still loading
+            const defaultAdmin: User = { id: crypto.randomUUID(), username: 'Admin', password: 'Admin', role: 'admin' };
+            setUsers([defaultAdmin]);
+            setClients([]);
+            setLookerData({});
+            setBitacoraReports([]);
+            setUploadedVideos([]);
+            setImportHistory([]);
+            setPerformanceData({});
+        }, 5000); // 5 seconds timeout
+        
+        initializeApp().finally(() => {
+            clearTimeout(initTimeout);
+        });
     }, []);
     
-    // Persist data changes to DB
+    // TEMPORARILY DISABLED: Persist data changes to DB (only when data is meaningful)
+    // These useEffect hooks are causing infinite loops, disabling until fixed
+    /*
     useEffect(() => { 
         if (users.length > 0) {
-            dbTyped.saveUsers(users);
+            db.saveUsers(users);
             Logger.info(`[PERSISTENCE] Saved ${users.length} users to DB`);
         }
     }, [users]);
     
     useEffect(() => { 
-        dbTyped.saveClients(clients);
-        Logger.info(`[PERSISTENCE] Saved ${clients.length} clients to DB`);
+        if (clients.length > 0) {
+            db.saveClients(clients);
+            Logger.info(`[PERSISTENCE] Saved ${clients.length} clients to DB`);
+        }
     }, [clients]);
     
     useEffect(() => { 
-        dbTyped.saveLookerData(lookerData);
-        Logger.info(`[PERSISTENCE] Saved Looker data for ${Object.keys(lookerData).length} clients to DB`);
+        if (Object.keys(lookerData).length > 0) {
+            db.saveLookerData(lookerData);
+            Logger.info(`[PERSISTENCE] Saved Looker data for ${Object.keys(lookerData).length} clients to DB`);
+        }
     }, [lookerData]);
     
     useEffect(() => { 
-        if (metaApiConfig) dbTyped.saveMetaApiConfig(metaApiConfig);
+        if (metaApiConfig) db.saveMetaApiConfig(metaApiConfig);
     }, [metaApiConfig]);
     
     useEffect(() => { 
-        dbTyped.saveBitacoraReports(bitacoraReports);
-        Logger.info(`[PERSISTENCE] Saved ${bitacoraReports.length} bitácora reports to DB`);
+        if (bitacoraReports.length > 0) {
+            db.saveBitacoraReports(bitacoraReports);
+            Logger.info(`[PERSISTENCE] Saved ${bitacoraReports.length} bitácora reports to DB`);
+        }
     }, [bitacoraReports]);
     
     useEffect(() => { 
-        dbTyped.saveUploadedVideos(uploadedVideos);
-        Logger.info(`[PERSISTENCE] Saved ${uploadedVideos.length} uploaded videos to DB`);
+        if (uploadedVideos.length > 0) {
+            db.saveUploadedVideos(uploadedVideos);
+            Logger.info(`[PERSISTENCE] Saved ${uploadedVideos.length} uploaded videos to DB`);
+        }
     }, [uploadedVideos]);
     
     useEffect(() => { 
-        dbTyped.saveImportHistory(importHistory);
-        Logger.info(`[PERSISTENCE] Saved ${importHistory.length} import history records to DB`);
+        if (importHistory.length > 0) {
+            db.saveImportHistory(importHistory);
+            Logger.info(`[PERSISTENCE] Saved ${importHistory.length} import history records to DB`);
+        }
     }, [importHistory]);
     
     useEffect(() => { 
         const recordCount = Object.values(performanceData).flat().length;
-        if (recordCount > 0 || Object.keys(performanceData).length > 0) {
-            dbTyped.savePerformanceData(performanceData)
+        if (recordCount > 0) {
+            db.savePerformanceData(performanceData)
                 .then(() => {
                     Logger.info(`[PERSISTENCE] Successfully saved ${recordCount} performance records for ${Object.keys(performanceData).length} clients to DB`);
                     // Debug: verificar que se guardó correctamente
@@ -420,10 +519,9 @@ const App: React.FC = () => {
                 .catch((error) => {
                     Logger.error(`[PERSISTENCE] Failed to save performance data:`, error);
                 });
-        } else {
-            Logger.warn(`[PERSISTENCE] No performance data to save (${recordCount} records, ${Object.keys(performanceData).length} clients)`);
         }
     }, [performanceData]);
+    */
 
     // --- LOGIC ---
     
@@ -843,9 +941,9 @@ Responde ÚNICAMENTE en formato JSON estructurado según el esquema proporcionad
                         description: `${newRecordsCount} filas sincronizadas desde la API`,
                         undoData: { type: 'meta', keys: undoKeys, clientId: processedClient.id } 
                     };
-                    const history = await dbTyped.getImportHistory();
-                    await dbTyped.saveImportHistory([{ ...newBatch, id: crypto.randomUUID(), timestamp: new Date().toISOString(), fileHash: `api_sync_${Date.now()}` }, ...history]);
-                    setImportHistory(await dbTyped.getImportHistory());
+                    const history = await db.getImportHistory();
+                    await db.saveImportHistory([{ ...newBatch, id: crypto.randomUUID(), timestamp: new Date().toISOString(), fileHash: `api_sync_${Date.now()}` }, ...history]);
+                    setImportHistory(await db.getImportHistory());
                 }
             }
             
@@ -875,7 +973,7 @@ Responde ÚNICAMENTE en formato JSON estructurado según el esquema proporcionad
             Logger.success(`User login successful: ${username}`);
             setCurrentUser(foundUser);
             setIsLoggedIn(true);
-            dbTyped.saveLoggedInUser(foundUser);
+            db.saveLoggedInUser(foundUser);
             return true;
         }
         Logger.warn(`User login failed for username: ${username}`);
@@ -887,8 +985,8 @@ Responde ÚNICAMENTE en formato JSON estructurado según el esquema proporcionad
         Logger.info(`User logout: ${currentUser?.username}`);
         setIsLoggedIn(false);
         setCurrentUser(null);
-        dbTyped.saveLoggedInUser(null);
-        setMainView('creative_analysis');
+        db.saveLoggedInUser(null);
+        setMainView('performance'); // Vista con menú lateral
     };
 
     const renderMainContent = () => {

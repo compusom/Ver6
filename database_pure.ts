@@ -1,15 +1,13 @@
 import { Client, User, PerformanceRecord, AllLookerData, BitacoraReport, UploadedVideo, ImportBatch, MetaApiConfig, ProcessedHashes } from './types';
 import { indexedDBManager } from './lib/indexedDBManager';
-import { localServerClient } from './lib/localServerClient';
 
 /**
- * Pure IndexedDB Database Manager - Ver6 Sistema Híbrido
+ * Pure IndexedDB Database Manager - Ver6 Sistema 100% IndexedDB
  * 
- * NUEVA ARQUITECTURA CON SERVIDOR LOCAL:
- * ✅ Servidor Local SQLite PRIORITARIO - Datos compartidos entre navegadores
- * ✅ IndexedDB como FALLBACK - Si el servidor no está disponible
+ * NUEVA ARQUITECTURA SIMPLIFICADA:
+ * ✅ IndexedDB ÚNICAMENTE - Sin fallbacks ni backups automáticos
  * ✅ localStorage SOLO para autenticación crítica
- * ✅ Detección automática de servidor disponible
+ * ✅ Sin descargas automáticas de JSON
  * ✅ Sin Universal Storage
  * ✅ Sistema robusto y predecible
  * 
@@ -21,39 +19,17 @@ import { localServerClient } from './lib/localServerClient';
 
 type DbConnectionStatus = {
     connected: boolean;
-    serverAvailable?: boolean;
 };
 
 // This state is controlled by the App component
 export const dbConnectionStatus: DbConnectionStatus = {
     connected: false,
-    serverAvailable: false,
 };
 
 let isConnected = false;
 
-// Check server availability on startup
-async function checkServerAvailability() {
-    try {
-        const available = await localServerClient.isServerAvailable();
-        dbConnectionStatus.serverAvailable = available;
-        
-        if (available) {
-            console.log('[DB] 🟢 Local server is available - using server storage');
-        } else {
-            console.log('[DB] 🟡 Local server not available - using IndexedDB fallback');
-        }
-        
-        return available;
-    } catch (error) {
-        console.warn('[DB] Error checking server availability:', error);
-        dbConnectionStatus.serverAvailable = false;
-        return false;
-    }
-}
-
 const checkConnection = () => {
-    if (!dbConnectionStatus.connected) {
+    if (!dbConnectionStatus.connected || !isConnected) {
         const errorMsg = 'Database not connected. Please check configuration in Settings.';
         console.error(`[DB] ${errorMsg}`);
         throw new Error(errorMsg);
@@ -66,24 +42,17 @@ const db = {
      */
     async connect(): Promise<void> {
         try {
-            // Check server availability first
-            await checkServerAvailability();
-            
-            // Always initialize IndexedDB as fallback
             await indexedDBManager.initialize();
+            isConnected = true;
             dbConnectionStatus.connected = true;
-            
-            if (dbConnectionStatus.serverAvailable) {
-                console.log('[DB] ✅ Connected to Local Server (primary) + IndexedDB (fallback)');
-            } else {
-                console.log('[DB] ✅ Connected to IndexedDB (server not available)');
-            }
+            console.log('[DB] ✅ Connected to IndexedDB successfully');
             
             // Initialize with any critical data migration if needed
             await this.migrateFromLegacyStorage();
             
         } catch (error) {
-            console.error('[DB] ❌ Failed to connect to database:', error);
+            console.error('[DB] ❌ Failed to connect to IndexedDB:', error);
+            isConnected = false;
             dbConnectionStatus.connected = false;
             throw error;
         }
@@ -114,42 +83,8 @@ const db = {
             }
         }
         
-        // Try local server first (if available)
-        if (dbConnectionStatus.serverAvailable) {
-            try {
-                const serverData = await localServerClient.loadData<T>(table);
-                if (serverData !== null && !this.isEmptyData(serverData)) {
-                    console.log(`[DB] ✅ Retrieved ${table} from local server`);
-                    return serverData;
-                }
-            } catch (error) {
-                console.warn(`[DB] Failed to load ${table} from server, falling back to IndexedDB:`, error);
-                // Fall through to IndexedDB
-            }
-        }
-        
-        // Special handling for processed_files_hashes - try file system
-        if (table === 'processed_files_hashes') {
-            try {
-                const fileData = await this.loadFromProjectFile(table);
-                if (fileData !== null) {
-                    console.log(`[DB] ✅ Retrieved ${table} from project file`);
-                    return fileData as T;
-                }
-            } catch (error) {
-                console.warn(`[DB] Could not load ${table} from project file:`, error);
-            }
-        }
-        
-        // All other data comes from IndexedDB (with connection check)
+        // All other data comes ONLY from IndexedDB
         try {
-            // Ensure connection before accessing IndexedDB
-            if (!dbConnectionStatus.connected) {
-                console.warn(`[DB] Database not connected, trying to initialize for ${table}`);
-                await indexedDBManager.initialize();
-                dbConnectionStatus.connected = true;
-            }
-            
             const result = await this.retrieveFromIndexedDB(table);
             if (result !== null) {
                 console.log(`[DB] ✅ Retrieved ${table} from IndexedDB`);
@@ -157,20 +92,6 @@ const db = {
             }
         } catch (indexedDbError) {
             console.error(`[DB] ❌ IndexedDB retrieval failed for ${table}:`, indexedDbError);
-            
-            // For non-critical data, try to return from project files as fallback
-            if (table === 'processed_files_hashes') {
-                try {
-                    const fileData = await this.loadFromProjectFile(table);
-                    if (fileData !== null) {
-                        console.log(`[DB] ⚠️ Retrieved ${table} from project file (fallback)`);
-                        return fileData as T;
-                    }
-                } catch (fileError) {
-                    console.warn(`[DB] Project file fallback also failed for ${table}:`, fileError);
-                }
-            }
-            
             throw new Error(`Failed to retrieve ${table} from IndexedDB: ${indexedDbError}`);
         }
 
@@ -180,7 +101,7 @@ const db = {
 
     async update(table: string, data: any): Promise<void> {
         // Allow writing config before connection is established
-        if (table !== 'config' && table !== 'processed_files_hashes') {
+        if (table !== 'config') {
             checkConnection();
         }
         console.log(`[DB] Executing: UPDATE ${table} with new data...`);
@@ -202,62 +123,8 @@ const db = {
             }
         }
 
-        // Try to save to local server first (if available)
-        // REACTIVATED with better empty data detection
-        if (dbConnectionStatus.serverAvailable && !this.isEmptyData(data)) {
-            try {
-                const success = await localServerClient.saveData(table, data);
-                if (success) {
-                    console.log(`[DB] ✅ Saved ${table} to local server`);
-                    
-                    // Also save to IndexedDB as backup for important data
-                    if (['clients', 'performance_data', 'looker_data'].includes(table)) {
-                        try {
-                            await this.routeToIndexedDB(table, data);
-                            console.log(`[DB] ✅ Also saved ${table} to IndexedDB backup`);
-                        } catch (backupError) {
-                            console.warn(`[DB] IndexedDB backup failed for ${table}:`, backupError);
-                        }
-                    }
-                    return;
-                } else {
-                    console.warn(`[DB] Failed to save ${table} to server, falling back to IndexedDB`);
-                }
-            } catch (error) {
-                console.warn(`[DB] Server save error for ${table}, falling back to IndexedDB:`, error);
-                // Fall through to IndexedDB
-            }
-        }
-
-        // Special handling for processed_files_hashes - save to project file
-        if (table === 'processed_files_hashes') {
-            try {
-                await this.saveToProjectFile(table, data);
-                console.log(`[DB] ✅ Saved ${table} to project file`);
-                
-                // Also try to save to IndexedDB as backup
-                try {
-                    await this.routeToIndexedDB(table, data);
-                    console.log(`[DB] ✅ Also saved ${table} to IndexedDB as backup`);
-                } catch (indexedDbError) {
-                    console.warn(`[DB] IndexedDB backup failed for ${table}:`, indexedDbError);
-                }
-                return;
-            } catch (error) {
-                console.error(`[DB] Failed to save ${table} to project file:`, error);
-                // Fall through to IndexedDB as fallback
-            }
-        }
-
         // All other data goes ONLY to IndexedDB
         try {
-            // Ensure connection before accessing IndexedDB
-            if (!dbConnectionStatus.connected) {
-                console.warn(`[DB] Database not connected, trying to initialize for saving ${table}`);
-                await indexedDBManager.initialize();
-                dbConnectionStatus.connected = true;
-            }
-            
             await this.routeToIndexedDB(table, data);
             console.log(`[DB] ✅ Successfully saved ${table} to IndexedDB`);
             
@@ -500,7 +367,7 @@ const db = {
                 if (legacyData) {
                     try {
                         const parsedData = JSON.parse(legacyData);
-                        if (parsedData && !this.isEmptyData(parsedData)) {
+                        if (parsedData && (Array.isArray(parsedData) ? parsedData.length > 0 : Object.keys(parsedData).length > 0)) {
                             await this.routeToIndexedDB(table, parsedData);
                             console.log(`[DB] ✅ Migrated ${table} from localStorage to IndexedDB`);
                             
@@ -759,102 +626,6 @@ const db = {
                 creativeDataByClient: {}
             };
         }
-    },
-
-    // ==================== PROJECT FILE STORAGE METHODS ====================
-
-    /**
-     * Save data to project file storage
-     */
-    async saveToProjectFile(filename: string, data: any): Promise<void> {
-        try {
-            const { projectFileStorage } = await import('./lib/projectFileStorage');
-            await projectFileStorage.saveData(filename, data);
-            console.log(`[DB] ✅ Saved ${filename} to project file storage`);
-        } catch (error) {
-            console.error(`[DB] Failed to save ${filename} to project file:`, error);
-            throw error;
-        }
-    },
-
-    /**
-     * Load data from project file storage
-     */
-    async loadFromProjectFile<T>(filename: string): Promise<T | null> {
-        try {
-            const { projectFileStorage } = await import('./lib/projectFileStorage');
-            const data = await projectFileStorage.loadData<T>(filename);
-            if (data) {
-                console.log(`[DB] ✅ Loaded ${filename} from project file storage`);
-            }
-            return data;
-        } catch (error) {
-            console.error(`[DB] Failed to load ${filename} from project file:`, error);
-            return null;
-        }
-    },
-
-    /**
-     * Export data to project file with timestamp
-     */
-    async exportToProjectFile(filename: string, data: any): Promise<void> {
-        try {
-            const { projectFileStorage } = await import('./lib/projectFileStorage');
-            await projectFileStorage.exportData(filename, data);
-            console.log(`[DB] ✅ Exported ${filename} to project files`);
-        } catch (error) {
-            console.error(`[DB] Failed to export ${filename} to project file:`, error);
-            throw error;
-        }
-    },
-
-    /**
-     * List available project files
-     */
-    async listProjectFiles(): Promise<string[]> {
-        try {
-            const { projectFileStorage } = await import('./lib/projectFileStorage');
-            return await projectFileStorage.listFiles();
-        } catch (error) {
-            console.error('[DB] Failed to list project files:', error);
-            return [];
-        }
-    },
-
-    /**
-     * Get project storage statistics
-     */
-    async getProjectStorageStats(): Promise<any> {
-        try {
-            const { projectFileStorage } = await import('./lib/projectFileStorage');
-            return await projectFileStorage.getStorageStats();
-        } catch (error) {
-            console.error('[DB] Failed to get project storage stats:', error);
-            return {
-                filesCount: 0,
-                totalSize: '0 KB',
-                files: []
-            };
-        }
-    },
-
-    // ==================== HELPER METHODS ====================
-
-    /**
-     * Check if data is empty (avoid saving empty arrays or objects)
-     */
-    isEmptyData(data: any): boolean {
-        if (data === null || data === undefined) return true;
-        
-        if (Array.isArray(data)) {
-            return data.length === 0;
-        }
-        
-        if (typeof data === 'object') {
-            return Object.keys(data).length === 0;
-        }
-        
-        return false;
     }
 };
 

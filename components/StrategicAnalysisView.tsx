@@ -46,6 +46,12 @@ export const StrategicAnalysisView: React.FC<StrategicAnalysisViewProps> = ({
     endDate,
     onDateChange
 }) => {
+    
+    // Validación defensiva para props
+    const safeClients = Array.isArray(clients) ? clients : [];
+    const safeLookerData = lookerData && typeof lookerData === 'object' ? lookerData : {};
+    const safePerformanceData = performanceData && typeof performanceData === 'object' ? performanceData : {};
+    
     const [selectedClientId, setSelectedClientId] = useState<string>('');
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [strategicResult, setStrategicResult] = useState<StrategicAnalysisResult | null>(null);
@@ -53,22 +59,22 @@ export const StrategicAnalysisView: React.FC<StrategicAnalysisViewProps> = ({
 
     // Filtrar clientes que tengan datos y creativos analizados
     const eligibleClients = useMemo(() => {
-        return clients.filter(client => {
-            const clientLookerData = lookerData[client.id] || {};
+        return safeClients.filter(client => {
+            const clientLookerData = safeLookerData[client.id] || {};
             const hasAnalyzedCreatives = Object.values(clientLookerData).some((ad: LookerCreativeData) => ad.analysisResult);
-            const hasPerformanceData = performanceData[client.id]?.length > 0;
+            const hasPerformanceData = safePerformanceData[client.id]?.length > 0;
             return hasAnalyzedCreatives && hasPerformanceData;
         });
-    }, [clients, lookerData, performanceData]);
+    }, [safeClients, safeLookerData, safePerformanceData]);
 
     const selectedClient = useMemo(() => {
-        return clients.find(c => c.id === selectedClientId);
-    }, [clients, selectedClientId]);
+        return safeClients.find(c => c.id === selectedClientId);
+    }, [safeClients, selectedClientId]);
 
     // Preparar datos para el análisis estratégico
     const prepareAnalysisData = (client: Client): StrategicAnalysisInput => {
-        const clientLookerData = lookerData[client.id] || {};
-        const clientPerformanceData = performanceData[client.id] || [];
+        const clientLookerData = safeLookerData[client.id] || {};
+        const clientPerformanceData = safePerformanceData[client.id] || [];
         
         // Filtrar datos por fecha
         const filteredPerformanceData = clientPerformanceData.filter(record => {
@@ -171,7 +177,7 @@ export const StrategicAnalysisView: React.FC<StrategicAnalysisViewProps> = ({
                     <div className="space-y-4">
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                             {eligibleClients.map(client => {
-                                const clientLookerData = lookerData[client.id] || {};
+                                const clientLookerData = safeLookerData[client.id] || {};
                                 const analyzedCreatives = Object.values(clientLookerData).filter((ad: LookerCreativeData) => ad.analysisResult).length;
                                 const totalAds = Object.keys(clientLookerData).length;
                                 

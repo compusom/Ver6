@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Client, PerformanceRecord, AllLookerData, ImportBatch } from '../types';
-import { dbTyped, dbConnectionStatus } from '../database';
+import db, { dbConnectionStatus } from '../database';
 import { indexedDb, migrateFromLocalStorage } from '../lib/sqliteDatabase';
 import Logger from '../Logger';
 
@@ -67,10 +67,10 @@ export const DataDiagnosticsModal: React.FC<DataDiagnosticsModalProps> = ({
         
         // Cargar hashes procesados y uso del localStorage
         try {
-            const hashes = await dbTyped.getProcessedHashes();
+            const hashes = await db.getProcessedHashes();
             setProcessedHashes(hashes);
             
-            const usage = dbTyped.getLocalStorageUsage();
+            const usage = db.getLocalStorageUsage();
             setStorageUsage(usage);
         } catch (e) {
             console.error('Error loading diagnostic data:', e);
@@ -305,7 +305,7 @@ export const DataDiagnosticsModal: React.FC<DataDiagnosticsModalProps> = ({
                                 onClick={async () => {
                                     if (confirm('¿Limpiar datos antiguos? Esto eliminará importaciones e historial viejo para liberar espacio.')) {
                                         try {
-                                            await dbTyped.clearOldData();
+                                            await db.clearOldData();
                                             await refreshData();
                                             alert('Datos antiguos limpiados correctamente.');
                                         } catch (e) {
@@ -322,7 +322,7 @@ export const DataDiagnosticsModal: React.FC<DataDiagnosticsModalProps> = ({
                                 onClick={async () => {
                                     if (confirm('¿Limpiar solo el historial de archivos procesados? Esto permitirá reimportar archivos.')) {
                                         try {
-                                            await dbTyped.saveProcessedHashes({});
+                                            await db.saveProcessedHashes({});
                                             await refreshData();
                                             alert('Hashes de archivos limpiados correctamente.');
                                         } catch (e) {
@@ -375,7 +375,7 @@ export const DataDiagnosticsModal: React.FC<DataDiagnosticsModalProps> = ({
                                     
                                     // 3. Verificar función de carga
                                     try {
-                                        const loadedData = await dbTyped.getPerformanceData();
+                                        const loadedData = await db.getPerformanceData();
                                         const loadedRecords = Object.values(loadedData).flat().length;
                                         console.log('3. Datos cargados desde DB:', {
                                             clientsWithData: Object.keys(loadedData),

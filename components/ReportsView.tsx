@@ -9,7 +9,7 @@ interface ReportsViewProps {
     bitacoraReports: BitacoraReport[];
 }
 
-const KPICard: React.FC<{ label: string; data: ParsedMetricValue | string | undefined, icon: JSX.Element }> = ({ label, data, icon }) => {
+const KPICard: React.FC<{ label: string; data: ParsedMetricValue | string | undefined, icon: React.ReactNode }> = ({ label, data, icon }) => {
     if (!data) return null;
 
     let valueStr = '';
@@ -228,20 +228,26 @@ const MetricDisplay: React.FC<{ label: string, data: ParsedMetricValue | string 
 
 
 export const ReportsView: React.FC<ReportsViewProps> = ({ clients, lookerData, bitacoraReports }) => {
+    
+    // Validación defensiva para props
+    const safeClients = Array.isArray(clients) ? clients : [];
+    const safeLookerData = lookerData && typeof lookerData === 'object' ? lookerData : {};
+    const safeBitacoraReports = Array.isArray(bitacoraReports) ? bitacoraReports : [];
+    
     const [selectedClientId, setSelectedClientId] = useState<string>('');
     const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(false);
 
     useEffect(() => {
-        if (clients.length > 0 && !selectedClientId) {
-            setSelectedClientId(clients[0].id);
+        if (safeClients.length > 0 && !selectedClientId) {
+            setSelectedClientId(safeClients[0].id);
         }
-    }, [clients, selectedClientId]);
+    }, [safeClients, selectedClientId]);
 
     const weeklySummaries = useMemo((): WeeklyReportSummary[] => {
         if (!selectedClientId) return [];
 
-        const clientReports = bitacoraReports.filter(r => r.clientId === selectedClientId);
+        const clientReports = safeBitacoraReports.filter(r => r.clientId === selectedClientId);
         const summariesMap = new Map<string, WeeklyReportSummary>();
 
         for (const report of clientReports) {

@@ -6,7 +6,7 @@ import { DateRangePicker } from './DateRangePicker';
 import { AiAnalysisModal } from './AiAnalysisModal';
 import { AnalysisDetailModal } from './AnalysisDetailModal';
 import { VideoUploadModal } from './VideoUploadModal';
-import { dbTyped } from '../database';
+import db from '../database';
 import Logger from '../Logger';
 import { MetricsDetailModal } from './MetricsDetailModal';
 
@@ -95,6 +95,20 @@ interface PerformanceViewProps {
 type View = 'list' | 'detail';
 
 export const PerformanceView: React.FC<PerformanceViewProps> = ({ clients, getPerformanceAnalysis, getFormatAnalysis, lookerData, setLookerData, performanceData, uploadedVideos, setUploadedVideos, startDate, endDate, onDateChange }) => {
+    
+    // Validación más permisiva - si clients no es un array, usar array vacío
+    const safeClients = Array.isArray(clients) ? clients : [];
+    const safePerformanceData = performanceData && typeof performanceData === 'object' ? performanceData : {};
+    
+    // Solo mostrar error si los datos deberían estar cargados (no es loading)
+    if (!Array.isArray(clients)) {
+        console.warn('[PerformanceView] clients is not an array, using empty array:', clients);
+    }
+    
+    if (!performanceData || typeof performanceData !== 'object') {
+        console.warn('[PerformanceView] performanceData is invalid, using empty object:', performanceData);
+    }
+    
     const [view, setView] = useState<View>('list');
     const [filterMode, setFilterMode] = useState<FilterMode>('all');
     const [displayMode, setDisplayMode] = useState<DisplayMode>('cards');
@@ -118,12 +132,12 @@ export const PerformanceView: React.FC<PerformanceViewProps> = ({ clients, getPe
     const [adForVideoUpload, setAdForVideoUpload] = useState<AggregatedAdPerformance | null>(null);
 
     useEffect(() => {
-        if (!selectedClient || !performanceData[selectedClient.id]) {
+        if (!selectedClient || !safePerformanceData[selectedClient.id]) {
             setAccountAverages(null);
             return;
         }
 
-        const allClientData = performanceData[selectedClient.id];
+        const allClientData = safePerformanceData[selectedClient.id];
         if (allClientData.length === 0) {
             setAccountAverages(null);
             return;
@@ -151,7 +165,7 @@ export const PerformanceView: React.FC<PerformanceViewProps> = ({ clients, getPe
 
         setAccountAverages(averages);
 
-    }, [selectedClient, performanceData]);
+    }, [selectedClient, safePerformanceData]);
 
     const filteredPerformanceData = useMemo(() => {
         const start = new Date(startDate);
@@ -160,19 +174,30 @@ export const PerformanceView: React.FC<PerformanceViewProps> = ({ clients, getPe
         end.setHours(23, 59, 59, 999);
         
         const filtered: { [key: string]: PerformanceRecord[] } = {};
-        for (const clientId in performanceData) {
-            filtered[clientId] = performanceData[clientId].filter(record => {
-                const recordDate = parseDate(record.day);
-                if (!recordDate) return false;
-                return recordDate >= start && recordDate <= end;
-            });
+        for (const clientId in safePerformanceData) {
+            // Asegurar que safePerformanceData[clientId] es un array antes de usar filter
+            const clientData = safePerformanceData[clientId];
+            if (Array.isArray(clientData)) {
+                filtered[clientId] = clientData.filter(record => {
+                    const recordDate = parseDate(record.day);
+                    if (!recordDate) return false;
+                    return recordDate >= start && recordDate <= end;
+                });
+            } else {
+                // Si no es un array, inicializar como array vacío
+                console.warn(`[PerformanceView] performanceData[${clientId}] is not an array:`, clientData);
+                filtered[clientId] = [];
+            }
         }
         return filtered;
-    }, [performanceData, startDate, endDate]);
+    }, [safePerformanceData, startDate, endDate]);
 
     const clientSummaries = useMemo(() => {
-        return clients.map(client => {
-            const data = filteredPerformanceData[client.id] || [];
+        // Usar safeClients en lugar de clients
+        return safeClients.map(client => {
+            const clientData = filteredPerformanceData[client.id];
+            // Validar que clientData es un array
+            const data = Array.isArray(clientData) ? clientData : [];
             const clientLookerData = lookerData[client.id] || {};
             
             if (data.length === 0) {
@@ -187,7 +212,7 @@ export const PerformanceView: React.FC<PerformanceViewProps> = ({ clients, getPe
 
             return { ...client, gastoTotal, roas, totalAds: uniqueAds.size, matchedCount };
         });
-    }, [clients, filteredPerformanceData, lookerData]);
+    }, [safeClients, filteredPerformanceData, lookerData]);
 
     const aggregatedClientData = useMemo<AggregatedAdPerformance[]>(() => {
         if (!selectedClient) return [];
@@ -207,7 +232,9 @@ export const PerformanceView: React.FC<PerformanceViewProps> = ({ clients, getPe
         }, {} as Record<string, PerformanceRecord[]>);
 
         const allAggregated = Object.entries(adsByName).map(([adName, records]) => {
-            const totals = records.reduce((acc, r) => {
+            // Validar que records es un array
+            const validRecords = Array.isArray(records) ? records : [];
+            const totals = validRecords.reduce((acc, r) => {
                 acc.spend += r.spend;
                 acc.purchases += r.purchases;
                 acc.purchaseValue += r.purchaseValue;
@@ -270,10 +297,10 @@ export const PerformanceView: React.FC<PerformanceViewProps> = ({ clients, getPe
             const tasaCompra = totals.landingPageViews > 0 ? (totals.purchases / totals.landingPageViews) * 100 : 0;
             
             const lookerMatch = clientLookerData[adName];
-            const inMultipleAdSets = new Set(records.map(r => r.adSetName)).size > 1;
-            const videoFileName = records.find(r => r.videoFileName)?.videoFileName;
+            const inMultipleAdSets = new Set(validRecords.map(r => r.adSetName)).size > 1;
+            const videoFileName = validRecords.find(r => r.videoFileName)?.videoFileName;
             
-            const isVideo = !!videoFileName || (records.some(r => r.thruPlays > 0) && videoAveragePlayTime > 1);
+            const isVideo = !!videoFileName || (validRecords.some(r => r.thruPlays > 0) && videoAveragePlayTime > 1);
             const creativeType: 'image' | 'video' | undefined = isVideo ? 'video' : (lookerMatch?.imageUrl ? 'image' : undefined);
             
             const isVideoUploaded = creativeType === 'video' ? uploadedVideos.some(v => v.clientId === selectedClient.id && v.adName === adName) : false;
@@ -472,6 +499,36 @@ export const PerformanceView: React.FC<PerformanceViewProps> = ({ clients, getPe
     };
 
     if (view === 'list') {
+        // Mostrar mensaje informativo si no hay clientes
+        if (safeClients.length === 0) {
+            return (
+                <div className="max-w-7xl mx-auto space-y-8 animate-fade-in">
+                    <header className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+                        <div>
+                            <h2 className="text-2xl font-bold text-brand-text">Rendimiento por Cliente</h2>
+                            <p className="text-brand-text-secondary mt-1">Gestiona el rendimiento de las campañas publicitarias.</p>
+                        </div>
+                        <DateRangePicker onDateChange={onDateChange} startDate={startDate} endDate={endDate} />
+                    </header>
+
+                    <div className="bg-blue-900/20 border border-blue-500 rounded-lg p-8 text-center">
+                        <div className="w-16 h-16 bg-blue-500 rounded-full flex items-center justify-center mx-auto mb-4">
+                            <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                            </svg>
+                        </div>
+                        <h3 className="text-xl font-semibold text-brand-text mb-2">No hay clientes configurados</h3>
+                        <p className="text-brand-text-secondary mb-4">
+                            Para ver datos de rendimiento, primero necesitas configurar clientes en el sistema.
+                        </p>
+                        <p className="text-sm text-brand-text-secondary">
+                            Ve a la sección <strong>Clientes</strong> en el menú para agregar clientes, o <strong>Importar</strong> para cargar datos.
+                        </p>
+                    </div>
+                </div>
+            );
+        }
+
         return (
             <div className="max-w-7xl mx-auto space-y-8 animate-fade-in">
                 <header className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">

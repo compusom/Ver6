@@ -1,6 +1,6 @@
 import React from 'react';
 import { ImportBatch, AllLookerData } from '../types';
-import { dbTyped } from '../database';
+import db from '../database';
 import Logger from '../Logger';
 
 interface ImportHistoryProps {
@@ -23,31 +23,31 @@ export const ImportHistory: React.FC<ImportHistoryProps> = ({ history, setHistor
             const { type, keys, clientId } = batchToUndo.undoData;
 
             if (type === 'meta') {
-                const perfData = await dbTyped.getPerformanceData();
+                const perfData = await db.getPerformanceData();
                 if (perfData[clientId]) {
                     const keysToUndo = new Set(keys);
                     perfData[clientId] = perfData[clientId].filter(record => !keysToUndo.has(record.uniqueId));
-                    await dbTyped.savePerformanceData(perfData);
+                    await db.savePerformanceData(perfData);
                 }
             } else if (type === 'looker') {
-                 const lookerData = await dbTyped.getLookerData();
+                 const lookerData = await db.getLookerData();
                  if (lookerData[clientId]) {
                     keys.forEach(adName => {
                         delete lookerData[clientId][adName];
                     });
-                    await dbTyped.saveLookerData(lookerData);
+                    await db.saveLookerData(lookerData);
                     setLookerData(lookerData); // Update app state
                  }
             } else if (type === 'txt') {
-                 let reports = await dbTyped.getBitacoraReports();
+                 let reports = await db.getBitacoraReports();
                  const keysToUndo = new Set(keys);
                  reports = reports.filter(report => !keysToUndo.has(report.id));
-                 await dbTyped.saveBitacoraReports(reports);
+                 await db.saveBitacoraReports(reports);
             }
             
             const updatedHistory = history.filter(b => b.id !== batchId);
             setHistory(updatedHistory);
-            await dbTyped.saveImportHistory(updatedHistory);
+            await db.saveImportHistory(updatedHistory);
             
             Logger.success(`Successfully undone import batch: ${batchId}`);
             alert('Importación deshecha con éxito.');

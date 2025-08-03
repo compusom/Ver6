@@ -1,7 +1,7 @@
-import React, { useState, useRef, useEffect, JSX } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Client, PerformanceRecord, AllLookerData, BitacoraReport, ImportBatch, MetaApiConfig, User, LookerProcessResult, ProcessResult } from '../types';
 import { NewClientsModal } from './NewClientsModal';
-import { dbTyped } from '../database';
+import db from '../database';
 import Logger from '../Logger';
 import { parseBitacoraReport } from '../lib/txtReportParser';
 import { ClientSelectorModal } from './ClientSelectorModal';
@@ -35,7 +35,7 @@ type Feedback = { type: 'info' | 'success' | 'error', message: string };
 const ImportCard: React.FC<{
     title: string;
     description: string;
-    icon: JSX.Element;
+    icon: React.ReactNode;
     onButtonClick: () => void;
     buttonText: string;
     disabled?: boolean;
@@ -60,6 +60,13 @@ const ImportCard: React.FC<{
 
 
 export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, lookerData, setLookerData, performanceData, setPerformanceData, bitacoraReports, setBitacoraReports, onSyncFromMeta, metaApiConfig, currentUser }) => {
+    
+    // Validación defensiva para props
+    const safeClients = Array.isArray(clients) ? clients : [];
+    const safeLookerData = lookerData && typeof lookerData === 'object' ? lookerData : {};
+    const safePerformanceData = performanceData && typeof performanceData === 'object' ? performanceData : {};
+    const safeBitacoraReports = Array.isArray(bitacoraReports) ? bitacoraReports : [];
+    
     const [isProcessing, setIsProcessing] = useState(false);
     const [feedback, setFeedback] = useState<Feedback | null>(null);
     const [isNewClientsModalOpen, setIsNewClientsModalOpen] = useState(false);
@@ -75,7 +82,7 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
     const txtInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
-        dbTyped.getImportHistory().then(history => {
+        db.getImportHistory().then(history => {
             setImportHistory(history.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()));
         });
     }, []);
@@ -83,12 +90,12 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
     const addImportToHistory = async (batch: Omit<ImportBatch, 'id' | 'timestamp'>) => {
         const newBatch: ImportBatch = { ...batch, id: crypto.randomUUID(), timestamp: new Date().toISOString() };
         setImportHistory(prev => [newBatch, ...prev]);
-        await dbTyped.saveImportHistory([newBatch, ...importHistory]);
+        await db.saveImportHistory([newBatch, ...importHistory]);
     };
     
     const processAndSaveFullData = async (file: File, source: 'meta', clientList: Client[]) => {
         const fileHash = await getFileHash(file);
-        const processedHashes = await dbTyped.getProcessedHashes();
+        const processedHashes = await db.getProcessedHashes();
 
         if (Object.values(processedHashes).flat().includes(fileHash)) {
             throw new Error(`Este archivo (${file.name}) ya ha sido importado previamente.`);
@@ -164,12 +171,12 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
                 newHashes[result.client.id] = [...(newHashes[result.client.id] || []), fileHash];
             }
         }
-        await dbTyped.saveProcessedHashes(newHashes);
+        await db.saveProcessedHashes(newHashes);
     };
 
     const processAndSaveLookerData = async (file: File, clientList: Client[]) => {
         const fileHash = await getFileHash(file);
-        const processedHashes = await dbTyped.getProcessedHashes();
+        const processedHashes = await db.getProcessedHashes();
     
         if (Object.values(processedHashes).flat().includes(fileHash)) {
             throw new Error(`Este archivo (${file.name}) ya ha sido importado previamente.`);
@@ -211,7 +218,7 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
                 newHashes[result.client.id] = [...(newHashes[result.client.id] || []), fileHash];
             }
         }
-        await dbTyped.saveProcessedHashes(newHashes);
+        await db.saveProcessedHashes(newHashes);
     };
     
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>, source: 'looker' | 'meta' | 'txt') => {
@@ -232,22 +239,22 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
         setFeedback({ type: 'info', message: `Procesando reporte de ${source}...` });
         try {
             if (source === 'looker') {
-                const checkResult = await processLookerData(file, clients, lookerData, true);
+                const checkResult = await processLookerData(file, safeClients, safeLookerData, true);
                 if ('newAccountNames' in checkResult && checkResult.newAccountNames.length > 0) {
                     setNewAccountNames(checkResult.newAccountNames);
                     setPendingXlsxFile({ file, source });
                     setIsNewClientsModalOpen(true);
                 } else {
-                    await processAndSaveLookerData(file, clients);
+                    await processAndSaveLookerData(file, safeClients);
                 }
             } else {
-                const checkResult = await processPerformanceData(file, clients, performanceData, source, true);
+                const checkResult = await processPerformanceData(file, safeClients, safePerformanceData, source, true);
                 if ('newAccountNames' in checkResult && checkResult.newAccountNames.length > 0) {
                     setNewAccountNames(checkResult.newAccountNames);
                     setPendingXlsxFile({ file, source });
                     setIsNewClientsModalOpen(true);
                 } else {
-                    await processAndSaveFullData(file, source, clients);
+                    await processAndSaveFullData(file, source, safeClients);
                 }
             }
         } catch (error) {
@@ -275,11 +282,11 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
         setFeedback({ type: 'info', message: 'Analizando y guardando reporte Bitácora...' });
         
         try {
-            const client = clients.find(c => c.id === clientId);
+            const client = safeClients.find(c => c.id === clientId);
             if (!client) throw new Error("Cliente no encontrado");
 
             const fileHash = await getFileHash(pendingTxtData.file);
-            const processedHashes = await dbTyped.getProcessedHashes();
+            const processedHashes = await db.getProcessedHashes();
             if(processedHashes[clientId]?.includes(fileHash)) {
                 throw new Error(`Este archivo (${pendingTxtData.file.name}) ya ha sido importado para este cliente.`);
             }
@@ -296,7 +303,7 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
             
             const updatedHashes = { ...processedHashes };
             updatedHashes[clientId] = [...(updatedHashes[clientId] || []), fileHash];
-            await dbTyped.saveProcessedHashes(updatedHashes);
+            await db.saveProcessedHashes(updatedHashes);
 
         } catch(error) {
             const message = error instanceof Error ? error.message : "Error desconocido.";
@@ -317,7 +324,7 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
             metaAccountName: accountName,
         }));
         
-        const updatedClients = [...clients, ...newClients];
+        const updatedClients = [...safeClients, ...newClients];
         setClients(updatedClients);
         setIsNewClientsModalOpen(false);
         Logger.info(`Created ${newClients.length} new clients from import.`);
@@ -397,9 +404,9 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
 
             <NewClientsModal isOpen={isNewClientsModalOpen} onClose={() => setIsNewClientsModalOpen(false)} newAccountNames={newAccountNames} onConfirm={handleCreateNewClients} />
             
-            <ClientSelectorModal isOpen={isTxtClientSelectorOpen} onClose={() => setIsTxtClientSelectorOpen(false)} clients={clients} onClientSelect={processTxtReport} title="Seleccionar Cliente para Reporte TXT" description="Elige a qué cliente pertenece este reporte de Bitácora."/>
+            <ClientSelectorModal isOpen={isTxtClientSelectorOpen} onClose={() => setIsTxtClientSelectorOpen(false)} clients={safeClients} onClientSelect={processTxtReport} title="Seleccionar Cliente para Reporte TXT" description="Elige a qué cliente pertenece este reporte de Bitácora."/>
             
-            <ClientSelectorModal isOpen={isApiSyncClientSelectorOpen} onClose={() => setIsApiSyncClientSelectorOpen(false)} clients={clients.filter(c => c.metaAccountName)} onClientSelect={onSyncFromMeta} title="Seleccionar Cliente para Sincronizar" description="Elige qué cliente quieres sincronizar desde la API de Meta."/>
+            <ClientSelectorModal isOpen={isApiSyncClientSelectorOpen} onClose={() => setIsApiSyncClientSelectorOpen(false)} clients={safeClients.filter(c => c.metaAccountName)} onClientSelect={onSyncFromMeta} title="Seleccionar Cliente para Sincronizar" description="Elige qué cliente quieres sincronizar desde la API de Meta."/>
             
             <ImportHistory history={importHistory} setHistory={setImportHistory} setLookerData={setLookerData} />
         </div>

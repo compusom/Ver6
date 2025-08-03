@@ -418,6 +418,35 @@ export interface MonthlyReportSummary {
       ventas: number;
       cpa: number;
   };
+  changes?: {
+      roas: number;
+      inversion: number;
+      ventas: number;
+      cpa: number;
+  };
+  importDate: string;
+}
+
+/**
+ * Campaign summary for efficient reporting and analytics
+ * Used by IndexedDB for pre-aggregated performance metrics
+ */
+export interface CampaignSummary {
+  clientId: string;
+  campaignName: string;
+  totalSpend: number;
+  totalRevenue: number;
+  totalImpressions: number;
+  totalPurchases: number;
+  roas: number;
+  cpm: number;
+  ctr: number;
+  startDate: string;
+  endDate: string;
+  adCount: number;
+  activeDays: number;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 export interface UploadedVideo {

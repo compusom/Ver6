@@ -101,15 +101,20 @@ const LoadingSkeleton: React.FC = () => (
 
 
 export const TrendsView: React.FC<TrendsViewProps> = ({ clients, lookerData, getTrendsAnalysis, performanceData, startDate, endDate, onDateChange }) => {
+    // Validación defensiva para props
+    const safeClients = Array.isArray(clients) ? clients : [];
+    const safeLookerData = lookerData && typeof lookerData === 'object' ? lookerData : {};
+    const safePerformanceData = performanceData && typeof performanceData === 'object' ? performanceData : {};
+    
     const [selectedClientId, setSelectedClientId] = useState<string>('');
     const [isLoading, setIsLoading] = useState(false);
     const [analysisResult, setAnalysisResult] = useState<TrendsAnalysisResult | null>(null);
     
     useEffect(() => {
-        if (clients.length > 0 && !selectedClientId) {
-            setSelectedClientId(clients[0].id);
+        if (safeClients.length > 0 && !selectedClientId) {
+            setSelectedClientId(safeClients[0].id);
         }
-    }, [clients, selectedClientId]);
+    }, [safeClients, selectedClientId]);
 
     const handleAnalyze = async () => {
         if (!selectedClientId || !startDate || !endDate) {
@@ -121,14 +126,14 @@ export const TrendsView: React.FC<TrendsViewProps> = ({ clients, lookerData, get
         setAnalysisResult(null);
         Logger.info('Starting trends analysis', { selectedClientId, startDate, endDate });
 
-        const client = clients.find(c => c.id === selectedClientId);
+        const client = safeClients.find(c => c.id === selectedClientId);
         if (!client) {
             setIsLoading(false);
             return;
         }
 
-        const clientLookerData = lookerData[client.id] || {};
-        const clientPerfData = performanceData[client.id] || [];
+        const clientLookerData = safeLookerData[client.id] || {};
+        const clientPerfData = safePerformanceData[client.id] || [];
 
         const start = new Date(startDate);
         start.setHours(0, 0, 0, 0);
@@ -147,7 +152,7 @@ export const TrendsView: React.FC<TrendsViewProps> = ({ clients, lookerData, get
             return acc;
         }, {} as Record<string, PerformanceRecord[]>);
 
-        const aggregatedAds: AggregatedAdPerformance[] = Object.entries(adsByName).map(([adName, records]) => {
+        const aggregatedAds: AggregatedAdPerformance[] = Object.entries(adsByName).map(([adName, records]: [string, PerformanceRecord[]]) => {
              const totals = records.reduce((acc, r) => {
                 const currentImpressions = r.impressions || 0;
                 acc.spend += r.spend || 0;
@@ -195,10 +200,10 @@ export const TrendsView: React.FC<TrendsViewProps> = ({ clients, lookerData, get
             });
             const activeDays = activeDaysSet.size;
 
-            const adSetNames = [...new Set(allRecordsForAd.map(r => r.adSetName))];
-            const campaignNames = [...new Set(allRecordsForAd.map(r => r.campaignName))];
-            const includedCustomAudiences = [...new Set(allRecordsForAd.flatMap(r => r.includedCustomAudiences?.split(',').map(s => s.trim()) || []).filter(Boolean))];
-            const excludedCustomAudiences = [...new Set(allRecordsForAd.flatMap(r => r.excludedCustomAudiences?.split(',').map(s => s.trim()) || []).filter(Boolean))];
+            const adSetNames = [...new Set(allRecordsForAd.map(r => r.adSetName as string))] as string[];
+            const campaignNames = [...new Set(allRecordsForAd.map(r => r.campaignName as string))] as string[];
+            const includedCustomAudiences: string[] = [...new Set(allRecordsForAd.flatMap(r => r.includedCustomAudiences?.split(',').map(s => s.trim()) || []).filter(Boolean))] as string[];
+            const excludedCustomAudiences: string[] = [...new Set(allRecordsForAd.flatMap(r => r.excludedCustomAudiences?.split(',').map(s => s.trim()) || []).filter(Boolean))] as string[];
 
             const roas = totals.spend > 0 ? totals.purchaseValue / totals.spend : 0;
             const cpa = totals.purchases > 0 ? totals.spend / totals.purchases : 0;
@@ -292,7 +297,14 @@ export const TrendsView: React.FC<TrendsViewProps> = ({ clients, lookerData, get
                 <p className="mt-4 text-lg text-brand-text-secondary">Obtén una visión estratégica de la IA sobre qué está funcionando, por qué, y qué hacer a continuación.</p>
             </header>
 
-            <div className="bg-brand-surface rounded-lg p-6 shadow-lg flex flex-col md:flex-row items-center gap-6">
+            {safeClients.length === 0 ? (
+                <div className="bg-brand-surface rounded-lg p-8 text-center">
+                    <h3 className="text-lg font-semibold text-brand-text mb-2">No hay clientes disponibles</h3>
+                    <p className="text-brand-text-secondary">Necesitas agregar al menos un cliente para poder usar el análisis de tendencias.</p>
+                </div>
+            ) : (
+                <>
+                    <div className="bg-brand-surface rounded-lg p-6 shadow-lg flex flex-col md:flex-row items-center gap-6">
                 <div className="flex-1 w-full">
                     <label htmlFor="client-selector" className="block text-sm font-medium text-brand-text-secondary mb-1">Seleccionar Cliente</label>
                     <select
@@ -301,7 +313,7 @@ export const TrendsView: React.FC<TrendsViewProps> = ({ clients, lookerData, get
                         onChange={(e) => setSelectedClientId(e.target.value)}
                         className="w-full bg-brand-bg border border-brand-border text-brand-text rounded-md p-3 focus:ring-brand-primary focus:border-brand-primary"
                     >
-                        {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                        {safeClients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                     </select>
                 </div>
                 <div className="flex-1 w-full">
@@ -352,6 +364,8 @@ export const TrendsView: React.FC<TrendsViewProps> = ({ clients, lookerData, get
                     </div>
                  )}
             </div>
+                </>
+            )}
         </div>
     );
 };

@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Project Storage</title>
+</head>
+<body>
+    <h1>Test Project File Storage System</h1>
+    
+    <div>
+        <h2>Test Actions:</h2>
+        <button onclick="testSaveProcessedFiles()">Save processed_files_hashes</button>
+        <button onclick="testLoadProcessedFiles()">Load processed_files_hashes</button>
+        <button onclick="testExportData()">Export Test Data</button>
+        <button onclick="showStorageStats()">Show Storage Stats</button>
+    </div>
+    
+    <div id="output" style="margin-top: 20px; padding: 10px; background: #f0f0f0; white-space: pre-wrap;"></div>
+
+    <script type="module">
+        // Import the project storage system
+        import db from './database.js';
+        
+        window.testSaveProcessedFiles = async () => {
+            const output = document.getElementById('output');
+            output.textContent = 'Testing save to project files...\n';
+            
+            try {
+                const testHashes = {
+                    'file1.txt': 'hash123',
+                    'file2.txt': 'hash456', 
+                    'file3.txt': 'hash789'
+                };
+                
+                // This should save to project files AND try IndexedDB
+                await db.update('processed_files_hashes', testHashes);
+                
+                output.textContent += '✅ Successfully saved processed_files_hashes\n';
+                output.textContent += 'Check your Downloads folder for processed_files_hashes.json\n';
+                
+            } catch (error) {
+                output.textContent += `❌ Error: ${error.message}\n`;
+                console.error('Test error:', error);
+            }
+        };
+        
+        window.testLoadProcessedFiles = async () => {
+            const output = document.getElementById('output');
+            output.textContent = 'Testing load from project files...\n';
+            
+            try {
+                const data = await db.select('processed_files_hashes');
+                
+                if (data && Object.keys(data).length > 0) {
+                    output.textContent += '✅ Successfully loaded processed_files_hashes:\n';
+                    output.textContent += JSON.stringify(data, null, 2) + '\n';
+                } else {
+                    output.textContent += '⚠️ No data found in processed_files_hashes\n';
+                }
+                
+            } catch (error) {
+                output.textContent += `❌ Error: ${error.message}\n`;
+                console.error('Test error:', error);
+            }
+        };
+        
+        window.testExportData = async () => {
+            const output = document.getElementById('output');
+            output.textContent = 'Testing export to project files...\n';
+            
+            try {
+                const testData = {
+                    timestamp: new Date().toISOString(),
+                    type: 'test_export',
+                    data: {
+                        message: 'This is a test export',
+                        numbers: [1, 2, 3, 4, 5]
+                    }
+                };
+                
+                await db.exportToProjectFile('test_export', testData);
+                
+                output.textContent += '✅ Successfully exported test data\n';
+                output.textContent += 'Check your Downloads folder for test_export_YYYY-MM-DD.json\n';
+                
+            } catch (error) {
+                output.textContent += `❌ Error: ${error.message}\n`;
+                console.error('Test error:', error);
+            }
+        };
+        
+        window.showStorageStats = async () => {
+            const output = document.getElementById('output');
+            output.textContent = 'Getting storage statistics...\n';
+            
+            try {
+                const stats = await db.getProjectStorageStats();
+                
+                output.textContent += '📊 Project Storage Statistics:\n';
+                output.textContent += `Files: ${stats.filesCount}\n`;
+                output.textContent += `Total Size: ${stats.totalSize}\n`;
+                output.textContent += '\nFile Details:\n';
+                
+                stats.files.forEach(file => {
+                    output.textContent += `  ${file.name}: ${file.size}\n`;
+                });
+                
+            } catch (error) {
+                output.textContent += `❌ Error: ${error.message}\n`;
+                console.error('Test error:', error);
+            }
+        };
+        
+        // Auto-test on load
+        document.addEventListener('DOMContentLoaded', () => {
+            const output = document.getElementById('output');
+            output.textContent = 'Project File Storage Test Ready!\n';
+            output.textContent += 'Click buttons above to test functionality.\n\n';
+            output.textContent += 'Expected behavior:\n';
+            output.textContent += '- Save/Load will use localStorage + generate downloads\n';
+            output.textContent += '- Export will create timestamped download files\n';
+            output.textContent += '- Files should appear in your Downloads folder\n';
+        });
+    </script>
+</body>
+</html>
