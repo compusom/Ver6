@@ -192,6 +192,25 @@ const LOOKER_COLUMN_MAP: { [key: string]: string } = {
 const REQUIRED_META_COLUMNS = ['nombre de la cuenta', 'account name', 'nombre del anuncio', 'ad name', 'día', 'day'];
 const REQUIRED_LOOKER_COLUMNS = ['nombre de la cuenta', 'account name', 'nombre del anuncio', 'ad name', 'ad creative thumbnail url'];
 
+// Variations for the "Account name" header
+const ACCOUNT_NAME_HEADERS = [
+    'nombre de la cuenta',
+    'nombre de cuenta',
+    'nombre de la cuenta publicitaria',
+    'nombre de cuenta publicitaria',
+    'account name',
+    'ad account name'
+];
+
+const findAccountNameKey = (headers: string[]): string | undefined => {
+    return headers.find(
+        h =>
+            ACCOUNT_NAME_HEADERS.includes(h) ||
+            (h.includes('account') && h.includes('name')) ||
+            (h.includes('cuenta') && h.includes('nombre'))
+    );
+};
+
 type ProcessResult = { client: Client; records: PerformanceRecord[]; undoKeys: string[]; newRecordsCount: number; periodStart?: string; periodEnd?: string; daysDetected?: number; };
 type LookerProcessResult = { client: Client; lookerDataPatch: ClientLookerData; undoKeys: string[]; newRecordsCount: number; };
 
@@ -218,7 +237,7 @@ export const processLookerData = async (
         throw new Error(`Columnas requeridas para Looker no encontradas. Asegúrate de que el reporte es correcto.`);
     }
 
-    const accountNameKey = headers.find(h => h === 'nombre de la cuenta' || h === 'account name');
+    const accountNameKey = findAccountNameKey(headers);
     if (!accountNameKey) throw new Error("Columna de nombre de cuenta no encontrada en el archivo de Looker.");
 
     const originalHeaders = Object.keys(json[0]);
@@ -307,7 +326,7 @@ export const processPerformanceData = async (
          throw new Error(`Columnas requeridas no encontradas. Asegúrate de que el reporte es correcto. Faltan: ${REQUIRED_META_COLUMNS.join(', ')}`);
     }
 
-    const accountNameKey = headers.find(h => h === 'nombre de la cuenta' || h === 'account name');
+    const accountNameKey = findAccountNameKey(headers);
     if (!accountNameKey) throw new Error("Columna 'Nombre de la cuenta' o 'Account name' no encontrada.");
     
     const dayKey = headers.find(h => h === 'día' || h === 'day');

@@ -19,7 +19,7 @@ import Database from 'better-sqlite3';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
-import sql from 'mssql';
+import mysql from 'mysql2/promise';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -122,35 +122,47 @@ initializeDatabase();
 
 // ==================== API ROUTES ====================
 
-// --- SQL Server connection management ---
+// --- MySQL connection management ---
 app.post('/api/sql/connect', async (req, res) => {
-    const { server, port, database, user, password, options } = req.body;
+    const { server, port, database, user, password } = req.body;
     const config = {
-        server,
+        host: server,
         port: parseInt(port, 10),
         database,
         user,
         password,
-        options: {
-            encrypt: options?.encrypt ?? false,
-            trustServerCertificate: options?.trustServerCertificate ?? true,
-        },
+        waitForConnections: true,
+        connectionLimit: 10,
     };
 
     try {
         if (sqlPool) {
-            await sqlPool.close();
+            await sqlPool.end();
         }
-        sqlPool = await new sql.ConnectionPool(config).connect();
+        sqlPool = mysql.createPool(config);
+        await sqlPool.query('SELECT 1');
         res.json({ success: true });
     } catch (error) {
+        if (sqlPool) {
+            await sqlPool.end().catch(() => {});
+        }
         sqlPool = null;
         res.status(500).json({ success: false, error: error.message });
     }
 });
 
-app.get('/api/sql/status', (req, res) => {
-    res.json({ connected: !!sqlPool });
+app.get('/api/sql/status', async (req, res) => {
+    if (!sqlPool) {
+        return res.json({ connected: false });
+    }
+    try {
+        await sqlPool.query('SELECT 1');
+        res.json({ connected: true });
+    } catch (error) {
+        await sqlPool.end().catch(() => {});
+        sqlPool = null;
+        res.json({ connected: false });
+    }
 });
 
 app.get('/api/sql/permissions', async (req, res) => {
@@ -158,12 +170,16 @@ app.get('/api/sql/permissions', async (req, res) => {
         return res.status(400).json({ error: 'Not connected' });
     }
     try {
-        const result = await sqlPool.request().query(`SELECT 
-            HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'SELECT') AS canSelect,
-            HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'INSERT') AS canInsert,
-            HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'UPDATE') AS canUpdate,
-            HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'DELETE') AS canDelete`);
-        res.json({ permissions: result.recordset[0] });
+        const [rows] = await sqlPool.query(
+            `SELECT 
+                SUM(privilege_type = 'SELECT') AS canSelect,
+                SUM(privilege_type = 'INSERT') AS canInsert,
+                SUM(privilege_type = 'UPDATE') AS canUpdate,
+                SUM(privilege_type = 'DELETE') AS canDelete
+            FROM information_schema.user_privileges
+            WHERE grantee = CONCAT("'", CURRENT_USER(), "'")`
+        );
+        res.json({ permissions: rows[0] });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
