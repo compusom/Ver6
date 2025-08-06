@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { GoogleGenAI, Type } from '@google/genai';
 import { AppView, Placement, Creative, AnalysisResult, FormatGroup, Language, CreativeSet, Client, AggregatedAdPerformance, User, AllLookerData, PerformanceRecord, TrendsAnalysisResult, TrendCardData, MetaApiConfig, BitacoraReport, UploadedVideo, ImportBatch, ProcessResult, StrategicAnalysisResult } from './types';
@@ -409,6 +408,7 @@ const App: React.FC = () => {
                 }
                 
                 console.log('🎉 [INIT] App initialization completed successfully!');
+                setIsLoading(false);
             } catch (error) {
                 const message = error instanceof Error ? error.message : 'Unknown DB error';
                 Logger.error('Failed to load data from database.', { error: message });
