@@ -26,6 +26,8 @@ export const SqlConnectionPanel: React.FC = () => {
 
     useEffect(() => {
         checkStatus();
+        const interval = setInterval(checkStatus, 5000);
+        return () => clearInterval(interval);
     }, []);
 
     const handleConnect = async () => {
@@ -48,15 +50,13 @@ export const SqlConnectionPanel: React.FC = () => {
             const data = await res.json();
             if (data.success) {
                 setMessage('Conexión exitosa');
-                setConnected(true);
             } else {
                 setMessage(data.error || 'Error al conectar');
-                setConnected(false);
             }
         } catch (error) {
             setMessage(error instanceof Error ? error.message : String(error));
-            setConnected(false);
         }
+        await checkStatus();
         setLoading(false);
     };
 
