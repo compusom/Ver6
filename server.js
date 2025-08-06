@@ -149,8 +149,19 @@ app.post('/api/sql/connect', async (req, res) => {
     }
 });
 
-app.get('/api/sql/status', (req, res) => {
-    res.json({ connected: !!sqlPool });
+app.get('/api/sql/status', async (req, res) => {
+    if (!sqlPool) {
+        return res.json({ connected: false });
+    }
+    try {
+        // Verify connection with a lightweight query
+        await sqlPool.request().query('SELECT 1');
+        res.json({ connected: true });
+    } catch (error) {
+        // If the query fails, consider the pool disconnected
+        sqlPool = null;
+        res.json({ connected: false, error: error.message });
+    }
 });
 
 app.get('/api/sql/permissions', async (req, res) => {
