@@ -156,12 +156,14 @@ app.get('/api/sql/status', async (req, res) => {
         return res.json({ connected: false });
     }
     try {
+
         await sqlPool.query('SELECT 1');
         res.json({ connected: true });
     } catch (error) {
         await sqlPool.end().catch(() => {});
         sqlPool = null;
         res.json({ connected: false });
+
     }
 });
 

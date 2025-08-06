@@ -36,8 +36,10 @@ export const SqlConnectionPanel: React.FC = () => {
 
     useEffect(() => {
         checkStatus();
+
         const id = setInterval(checkStatus, 5000);
         return () => clearInterval(id);
+
     }, []);
 
     const handleConnect = async () => {
@@ -64,6 +66,7 @@ export const SqlConnectionPanel: React.FC = () => {
         } catch (error) {
             const msg = error instanceof Error ? error.message : String(error);
             setMessage(msg === 'Failed to fetch' ? 'No se pudo conectar con el backend' : msg);
+
         }
         await checkStatus();
         setLoading(false);
