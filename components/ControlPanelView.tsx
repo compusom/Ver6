@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import db from '../database';
 import Logger from '../Logger';
+import { SqlConnectionPanel } from './SqlConnectionPanel';
 
 type TableKey = 'clients' | 'users' | 'performance_data' | 'looker_data' | 'bitacora_reports' | 'uploaded_videos' | 'import_history' | 'processed_files_hashes';
 
@@ -74,6 +75,7 @@ export const ControlPanelView: React.FC = () => {
 
     return (
         <div className="max-w-4xl mx-auto bg-brand-surface rounded-lg p-8 shadow-lg animate-fade-in space-y-8">
+            <SqlConnectionPanel />
             <div>
                 <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4 mb-4">
                     <div>

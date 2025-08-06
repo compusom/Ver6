@@ -30,8 +30,6 @@ export const dbConnectionStatus: DbConnectionStatus = {
     serverAvailable: false,
 };
 
-let isConnected = false;
-
 // Check server availability on startup
 async function checkServerAvailability() {
     try {
@@ -599,7 +597,7 @@ const db = {
         }
         
         return {
-            connected: isConnected,
+            connected: dbConnectionStatus.connected,
             indexedDBAvailable,
             storageStats,
             issues

@@ -19,21 +19,25 @@ import Database from 'better-sqlite3';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
+import sql from 'mssql';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const app = express();
-const PORT = 3001;
+const PORT = parseInt(process.env.PORT || '3001', 10);
+const BODY_LIMIT_MB = process.env.BODY_LIMIT_MB || '50mb';
 
 // Database setup
 const dbPath = join(__dirname, 'ver6_data.db');
 const db = new Database(dbPath);
 
+let sqlPool = null;
+
 // Middleware
 app.use(cors());
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use(express.json({ limit: BODY_LIMIT_MB }));
+app.use(express.urlencoded({ extended: true, limit: BODY_LIMIT_MB }));
 
 // File upload configuration
 const storage = multer.diskStorage({
@@ -117,6 +121,53 @@ function initializeDatabase() {
 initializeDatabase();
 
 // ==================== API ROUTES ====================
+
+// --- SQL Server connection management ---
+app.post('/api/sql/connect', async (req, res) => {
+    const { server, port, database, user, password, options } = req.body;
+    const config = {
+        server,
+        port: parseInt(port, 10),
+        database,
+        user,
+        password,
+        options: {
+            encrypt: options?.encrypt ?? false,
+            trustServerCertificate: options?.trustServerCertificate ?? true,
+        },
+    };
+
+    try {
+        if (sqlPool) {
+            await sqlPool.close();
+        }
+        sqlPool = await new sql.ConnectionPool(config).connect();
+        res.json({ success: true });
+    } catch (error) {
+        sqlPool = null;
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.get('/api/sql/status', (req, res) => {
+    res.json({ connected: !!sqlPool });
+});
+
+app.get('/api/sql/permissions', async (req, res) => {
+    if (!sqlPool) {
+        return res.status(400).json({ error: 'Not connected' });
+    }
+    try {
+        const result = await sqlPool.request().query(`SELECT 
+            HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'SELECT') AS canSelect,
+            HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'INSERT') AS canInsert,
+            HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'UPDATE') AS canUpdate,
+            HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'DELETE') AS canDelete`);
+        res.json({ permissions: result.recordset[0] });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
 
 /**
  * Health check endpoint
