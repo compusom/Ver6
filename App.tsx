@@ -1037,7 +1037,7 @@ Responde ÚNICAMENTE en formato JSON estructurado según el esquema proporcionad
                         />
                     </div>
                     
-                    <main className="animate-fade-in pt-24 lg:pt-20 px-4 sm:px-6 lg:px-8 pb-8">
+                    <main className="animate-fade-in pt-32 lg:pt-28 px-4 sm:px-6 lg:px-8 pb-8">
                         {mainView === 'creative_analysis' && <CreativeAnalysisView clients={visibleClients} getFormatAnalysis={getFormatAnalysis} />}
                         {mainView === 'performance' && <PerformanceView clients={visibleClients} getPerformanceAnalysis={getPerformanceAnalysis} getFormatAnalysis={getFormatAnalysis} lookerData={lookerData} setLookerData={setLookerData} performanceData={performanceData} uploadedVideos={uploadedVideos} setUploadedVideos={setUploadedVideos} startDate={startDate} endDate={endDate} onDateChange={(start, end) => { setStartDate(start); setEndDate(end); }} />}
                         {mainView === 'strategies' && <TrendsView clients={visibleClients} lookerData={lookerData} getTrendsAnalysis={getTrendsAnalysis} performanceData={performanceData} startDate={startDate} endDate={endDate} onDateChange={(start, end) => { setStartDate(start); setEndDate(end); }} />}
