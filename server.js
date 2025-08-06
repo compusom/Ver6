@@ -24,7 +24,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const app = express();
-const PORT = 3001;
+const PORT = parseInt(process.env.PORT || '3001', 10);
+const BODY_LIMIT_MB = process.env.BODY_LIMIT_MB || '50mb';
 
 // Database setup
 const dbPath = join(__dirname, 'ver6_data.db');
@@ -32,8 +33,8 @@ const db = new Database(dbPath);
 
 // Middleware
 app.use(cors());
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use(express.json({ limit: BODY_LIMIT_MB }));
+app.use(express.urlencoded({ extended: true, limit: BODY_LIMIT_MB }));
 
 // File upload configuration
 const storage = multer.diskStorage({
