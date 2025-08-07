@@ -210,11 +210,21 @@ app.post('/api/sql/connect', async (req, res) => {
             await sqlPool.close();
         }
         sqlPool = await new sql.ConnectionPool(config).connect();
-        
+
         // Probar la conexión
         const result = await sqlPool.request().query('SELECT 1 as test');
         logger.info('[SQL] Conexión exitosa a SQL Server');
-        
+
+        // Ensure necessary tables and columns exist immediately after connecting
+        try {
+            await ensureSqlTables();
+        } catch (migrationError) {
+            logger.error('[SQL] Error ensuring tables:', migrationError.message);
+            await sqlPool.close().catch(() => {});
+            sqlPool = null;
+            return res.status(500).json({ success: false, error: migrationError.message });
+        }
+
         res.json({ success: true });
     } catch (error) {
         logger.error('[SQL] Error al conectar:', error.message);
@@ -298,14 +308,36 @@ app.get('/api/sql/permissions', async (req, res) => {
 });
 
 // --- Manage SQL Server tables ---
-// Shared handler to initialize required tables if they are missing. Some users
-// have reported hitting this endpoint with GET in the browser, so we expose the
-// same logic for both GET and POST requests to avoid "Cannot POST"/"Cannot GET"
-// confusion.
+// Shared helper to initialize required tables and columns if they are missing.
+async function ensureSqlTables() {
+    const created = [];
+    const altered = [];
+    for (const table of TABLE_CREATION_ORDER) {
+        const exists = await sqlPool
+            .request()
+            .query(`SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='${table}'`);
+        if (exists.recordset.length === 0) {
+            await sqlPool.request().query(SQL_TABLE_DEFINITIONS[table]);
+            created.push(table);
+        }
+    }
+
+    const columnCheck = await sqlPool
+        .request()
+        .query("SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='archivos_reporte' AND COLUMN_NAME='days_detected'");
+    if (columnCheck.recordset.length === 0) {
+        await sqlPool.request().query('ALTER TABLE archivos_reporte ADD days_detected INT');
+        altered.push('archivos_reporte.days_detected');
+    }
+    return { created, altered };
+}
+
+// Exposed route handler that wraps ensureSqlTables and reports results.
 async function initSqlTables(req, res) {
     if (!sqlPool) {
         return res.status(400).json({ error: 'Not connected' });
     }
+
     const created = [];
     const altered = [];
     try {
@@ -328,6 +360,7 @@ async function initSqlTables(req, res) {
             await sqlPool.request().query('ALTER TABLE archivos_reporte ADD days_detected INT');
             altered.push('archivos_reporte.days_detected');
         }
+
 
         res.json({ success: true, created, altered });
     } catch (error) {
