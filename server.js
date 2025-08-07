@@ -368,6 +368,36 @@ async function initSqlTables(req, res) {
             altered.push('archivos_reporte.days_detected');
         }
 
+        // Ensure demographic columns exist on metricas table
+        const edadCheck = await sqlPool
+            .request()
+            .query("SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='metricas' AND COLUMN_NAME='edad'");
+        if (edadCheck.recordset.length === 0) {
+            await sqlPool.request().query("ALTER TABLE metricas ADD [edad] VARCHAR(50)");
+            altered.push('metricas.edad');
+        }
+        const sexoCheck = await sqlPool
+            .request()
+            .query("SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='metricas' AND COLUMN_NAME='sexo'");
+        if (sexoCheck.recordset.length === 0) {
+            await sqlPool.request().query("ALTER TABLE metricas ADD [sexo] VARCHAR(50)");
+            altered.push('metricas.sexo');
+        }
+
+        // Remove deprecated columns if they exist
+        const obsoleteColumns = ['imagen_video_y_presentación', 'col_6'];
+        for (const col of obsoleteColumns) {
+            const chk = await sqlPool
+                .request()
+                .query(
+                    `SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='metricas' AND COLUMN_NAME='${col}'`
+                );
+            if (chk.recordset.length > 0) {
+                await sqlPool.request().query(`ALTER TABLE metricas DROP COLUMN [${col}]`);
+                altered.push(`metricas.drop_${col}`);
+            }
+        }
+
 
 
         res.json({ success: true, created, altered });
