@@ -3,6 +3,7 @@ import React, { useEffect, useState } from 'react';
 export const SqlConnectionPanel: React.FC = () => {
     const [tables, setTables] = useState<string[]>([]);
     const [tablesLoading, setTablesLoading] = useState(false);
+    const [tableOpsLoading, setTableOpsLoading] = useState(false);
 
     const fetchTables = async () => {
         setTablesLoading(true);
@@ -159,6 +160,54 @@ export const SqlConnectionPanel: React.FC = () => {
         setLoading(false);
     };
 
+    // --- Table management actions ---
+    const handleInitTables = async () => {
+        setTableOpsLoading(true);
+        setMessage('');
+        try {
+            const data = await fetchJson('/api/sql/init-tables', { method: 'POST' });
+            if (data.created && data.created.length) {
+                setMessage(`Tablas creadas: ${data.created.join(', ')}`);
+            } else {
+                setMessage('Todas las tablas ya existían');
+            }
+            await fetchTables();
+        } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            setMessage(msg === 'Failed to fetch' ? 'No se pudo conectar con el backend' : msg);
+        }
+        setTableOpsLoading(false);
+    };
+
+    const handleDropTables = async () => {
+        if (!window.confirm('¿Seguro que deseas eliminar TODAS las tablas? Esta acción no se puede deshacer.')) return;
+        setTableOpsLoading(true);
+        setMessage('');
+        try {
+            await fetchJson('/api/sql/tables', { method: 'DELETE' });
+            setMessage('Tablas eliminadas');
+            setTables([]);
+        } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            setMessage(msg === 'Failed to fetch' ? 'No se pudo conectar con el backend' : msg);
+        }
+        setTableOpsLoading(false);
+    };
+
+    const handleClearTables = async () => {
+        if (!window.confirm('¿Deseas borrar todos los datos de las tablas?')) return;
+        setTableOpsLoading(true);
+        setMessage('');
+        try {
+            await fetchJson('/api/sql/tables/data', { method: 'DELETE' });
+            setMessage('Datos borrados de todas las tablas');
+        } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            setMessage(msg === 'Failed to fetch' ? 'No se pudo conectar con el backend' : msg);
+        }
+        setTableOpsLoading(false);
+    };
+
     return (
         <div className="mb-8">
             {connectionAlert && (
@@ -222,14 +271,37 @@ export const SqlConnectionPanel: React.FC = () => {
                 </button>
             </div>
             {/* Botón y listado de tablas SQL debajo del panel de conexión */}
-            <div className="mb-4">
+            <div className="mb-4 space-y-4">
                 <button
                     onClick={fetchTables}
                     disabled={!connected || tablesLoading}
-                    className="bg-brand-border hover:bg-brand-border/70 text-brand-text font-bold py-2 px-4 rounded-lg shadow-md transition-colors disabled:opacity-50"
+                    className="bg-brand-border hover:bg-brand-border/70 text-brand-text font-bold py-2 px-4 rounded-lg shadow-md transition-colors disabled:opacity-50 w-full sm:w-auto"
                 >
                     {tablesLoading ? 'Consultando tablas...' : 'Refrescar Estado de Tablas SQL'}
                 </button>
+                <div className="flex flex-wrap gap-2">
+                    <button
+                        onClick={handleInitTables}
+                        disabled={!connected || tableOpsLoading}
+                        className="bg-brand-border hover:bg-brand-border/70 text-brand-text font-bold py-2 px-4 rounded-lg shadow-md transition-colors disabled:opacity-50"
+                    >
+                        {tableOpsLoading ? 'Procesando...' : 'Crear/Verificar Tablas'}
+                    </button>
+                    <button
+                        onClick={handleClearTables}
+                        disabled={!connected || tableOpsLoading}
+                        className="bg-brand-border hover:bg-brand-border/70 text-brand-text font-bold py-2 px-4 rounded-lg shadow-md transition-colors disabled:opacity-50"
+                    >
+                        {tableOpsLoading ? 'Procesando...' : 'Borrar Datos'}
+                    </button>
+                    <button
+                        onClick={handleDropTables}
+                        disabled={!connected || tableOpsLoading}
+                        className="bg-brand-border hover:bg-brand-border/70 text-brand-text font-bold py-2 px-4 rounded-lg shadow-md transition-colors disabled:opacity-50"
+                    >
+                        {tableOpsLoading ? 'Procesando...' : 'Eliminar Tablas'}
+                    </button>
+                </div>
             </div>
             {tables.length > 0 && (
                 <div className="mb-4">
