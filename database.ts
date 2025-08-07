@@ -667,7 +667,20 @@ const db = {
     },
 
     async getImportHistory(): Promise<ImportBatch[]> {
-        return await this.select('import_history', []);
+        const history = await this.select('import_history', []);
+        if (Array.isArray(history)) {
+            return history;
+        }
+        if (history && typeof history === 'object') {
+            if (Array.isArray((history as any).default)) {
+                return (history as any).default as ImportBatch[];
+            }
+            const values = Object.values(history as any);
+            if (values.length === 1 && Array.isArray(values[0])) {
+                return values[0] as ImportBatch[];
+            }
+        }
+        return [];
     },
 
     async saveImportHistory(history: ImportBatch[]): Promise<void> {
