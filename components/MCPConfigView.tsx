@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { notify } from './notificationService';
 import { mcpConnector } from '../lib/mcpConnector';
 
 interface MCPConfigViewProps {
@@ -38,12 +39,12 @@ export const MCPConfigView: React.FC<MCPConfigViewProps> = ({ onConfigSaved }) =
 
         mcpConnector.saveConfig(config);
         onConfigSaved?.();
-        alert('Configuración MCP guardada exitosamente');
+        notify('Configuración MCP guardada exitosamente', 'success');
     };
 
     const handleTestConnection = async () => {
         if (!testUrl.trim()) {
-            alert('Por favor ingresa una URL de test válida');
+            notify('Por favor ingresa una URL de test válida', 'error');
             return;
         }
 

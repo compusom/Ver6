@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
+import { notify } from './notificationService';
 import { User } from '../types';
 import { Modal } from './Modal';
 
@@ -33,7 +34,7 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({ isOpen, onClose, o
     const handleSave = (e: React.FormEvent) => {
         e.preventDefault();
         if (!username.trim() || (!initialData && !password.trim())) {
-             alert('El nombre de usuario y la contraseña son obligatorios para nuevos usuarios.');
+             notify('El nombre de usuario y la contraseña son obligatorios para nuevos usuarios.', 'error');
             return;
         }
 

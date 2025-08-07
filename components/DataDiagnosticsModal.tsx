@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { notify } from './notificationService';
 import { Client, PerformanceRecord, AllLookerData, ImportBatch } from '../types';
 import db, { dbConnectionStatus } from '../database';
 import { indexedDb, migrateFromLocalStorage } from '../lib/sqliteDatabase';
@@ -286,14 +287,14 @@ export const DataDiagnosticsModal: React.FC<DataDiagnosticsModalProps> = ({
                                         try {
                                             const success = await migrateFromLocalStorage();
                                             if (success) {
-                                                alert('Migración completada exitosamente. Los datos ahora están en IndexedDB.');
+                                                notify('Migración completada exitosamente. Los datos ahora están en IndexedDB.', 'success');
                                                 await refreshData();
                                             } else {
-                                                alert('Error durante la migración. Ver consola para detalles.');
+                                                notify('Error durante la migración. Ver consola para detalles.', 'error');
                                             }
                                         } catch (e) {
                                             console.error('Migration error:', e);
-                                            alert('Error durante la migración.');
+                                            notify('Error durante la migración.', 'error');
                                         }
                                     }
                                 }}
@@ -307,10 +308,10 @@ export const DataDiagnosticsModal: React.FC<DataDiagnosticsModalProps> = ({
                                         try {
                                             await db.clearOldData();
                                             await refreshData();
-                                            alert('Datos antiguos limpiados correctamente.');
+                                            notify('Datos antiguos limpiados correctamente.', 'success');
                                         } catch (e) {
                                             console.error('Error cleaning old data:', e);
-                                            alert('Error al limpiar datos antiguos.');
+                                            notify('Error al limpiar datos antiguos.', 'error');
                                         }
                                     }
                                 }}
@@ -324,10 +325,10 @@ export const DataDiagnosticsModal: React.FC<DataDiagnosticsModalProps> = ({
                                         try {
                                             await db.saveProcessedHashes({});
                                             await refreshData();
-                                            alert('Hashes de archivos limpiados correctamente.');
+                                            notify('Hashes de archivos limpiados correctamente.', 'success');
                                         } catch (e) {
                                             console.error('Error clearing hashes:', e);
-                                            alert('Error al limpiar hashes.');
+                                            notify('Error al limpiar hashes.', 'error');
                                         }
                                     }
                                 }}
@@ -344,12 +345,12 @@ export const DataDiagnosticsModal: React.FC<DataDiagnosticsModalProps> = ({
                                             const parsed = JSON.parse(perfData);
                                             console.log('[DEBUG] Performance data in localStorage:', parsed);
                                             const recordCount = Object.values(parsed).flat().length;
-                                            alert(`LocalStorage contiene ${recordCount} registros de performance para ${Object.keys(parsed).length} clientes.\n\nVer consola para detalles.`);
+                                            notify(`LocalStorage contiene ${recordCount} registros de performance para ${Object.keys(parsed).length} clientes.\n\nVer consola para detalles.`);
                                         } catch (e) {
-                                            alert('Error al parsear datos de performance en localStorage');
+                                            notify('Error al parsear datos de performance en localStorage', 'error');
                                         }
                                     } else {
-                                        alert('No hay datos de performance en localStorage');
+                                        notify('No hay datos de performance en localStorage', 'info');
                                     }
                                 }}
                                 className="px-3 py-1 bg-blue-500/20 text-blue-400 rounded text-sm hover:bg-blue-500/30"
@@ -392,7 +393,7 @@ export const DataDiagnosticsModal: React.FC<DataDiagnosticsModalProps> = ({
                                         };
                                         console.log('4. Comparación:', comparison);
                                         
-                                        alert(`Test completo ejecutado. Ver consola para detalles.\n\n` +
+                                        notify(`Test completo ejecutado. Ver consola para detalles.\n\n` +
                                               `Resumen:\n` +
                                               `- LocalStorage: ${comparison.localStorageHasData ? 'SÍ' : 'NO'} tiene datos\n` +
                                               `- App State: ${comparison.appStateHasData ? 'SÍ' : 'NO'} tiene datos\n` +
@@ -400,8 +401,8 @@ export const DataDiagnosticsModal: React.FC<DataDiagnosticsModalProps> = ({
                                               `- Datos coinciden: ${comparison.dataMatches ? 'SÍ' : 'NO'}`);
                                         
                                     } catch (e) {
-                                        console.error('Error en test:', e);
-                                        alert('Error durante el test. Ver consola.');
+                                        Logger.error('Error en test:', e);
+                                        notify('Error durante el test. Ver consola.', 'error');
                                     }
                                     
                                     console.log('=== FIN TEST COMPLETO ===');
@@ -431,16 +432,16 @@ export const DataDiagnosticsModal: React.FC<DataDiagnosticsModalProps> = ({
                 dbConnectionStatus.connected = true;
                 Logger.success('Tabla de rendimiento creada y marcada como ONLINE.');
                 console.log('[DIAGNOSTICS] Tabla de rendimiento creada y ONLINE.');
-                alert('Tabla de rendimiento creada correctamente y ONLINE.');
+                notify('Tabla de rendimiento creada correctamente y ONLINE.', 'success');
                 await refreshData();
             } else {
                 Logger.info('La tabla de rendimiento ya está ONLINE.');
-                alert('La tabla de rendimiento ya está ONLINE.');
+                notify('La tabla de rendimiento ya está ONLINE.', 'info');
             }
         } catch (e: unknown) {
             Logger.error<{ error: unknown }>('Error creando la tabla de rendimiento.', { error: e });
             console.error('[DIAGNOSTICS] Error creando la tabla de rendimiento:', e);
-            alert('Error creando la tabla de rendimiento. Ver consola y log.');
+            notify('Error creando la tabla de rendimiento. Ver consola y log.', 'error');
         }
     }}
                                 className="px-3 py-1 bg-green-500/20 text-green-400 rounded text-sm hover:bg-green-500/30"

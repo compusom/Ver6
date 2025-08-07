@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { notify } from './notificationService';
 import { Client, AllLookerData, PerformanceRecord, AggregatedAdPerformance, TrendsAnalysisResult, TrendCardData, AppView, AccountAverages } from '../types';
 import { DateRangePicker } from './DateRangePicker';
 import Logger from '../Logger';
@@ -118,7 +119,7 @@ export const TrendsView: React.FC<TrendsViewProps> = ({ clients, lookerData, get
 
     const handleAnalyze = async () => {
         if (!selectedClientId || !startDate || !endDate) {
-            alert("Por favor, selecciona un cliente y un rango de fechas.");
+            notify("Por favor, selecciona un cliente y un rango de fechas.", 'info');
             return;
         }
         
@@ -276,7 +277,7 @@ export const TrendsView: React.FC<TrendsViewProps> = ({ clients, lookerData, get
             .slice(0, 7); // Increased to 7 for more context
 
         if (topAds.length === 0) {
-            alert("No hay suficientes anuncios con buen rendimiento y análisis de IA en este período para generar un análisis de tendencias. Intenta con un rango de fechas más amplio o analiza más creativos.");
+            notify("No hay suficientes anuncios con buen rendimiento y análisis de IA en este período para generar un análisis de tendencias. Intenta con un rango de fechas más amplio o analiza más creativos.", 'info');
             setIsLoading(false);
             return;
         }

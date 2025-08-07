@@ -22,6 +22,8 @@ import fs from 'fs';
 import sql from 'mssql';
 import xlsx from 'xlsx';
 import crypto from 'crypto';
+import logger from './serverLogger.js';
+import { SQL_TABLE_DEFINITIONS, getCreationOrder, getDeletionOrder } from './sqlTables.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -36,139 +38,9 @@ const db = new Database(dbPath);
 
 let sqlPool = null;
 
-// --- SQL Server Table Definitions ---
-// Mapping of table names to their CREATE TABLE statements. These will be used
-// to ensure that the required schema exists when importing data from Excel or
-// other sources. The order of the keys in TABLE_CREATION_ORDER matters for
-// foreign-key relationships (parents first, children afterwards).
-const SQL_TABLE_DEFINITIONS = {
-    clientes: `
-        CREATE TABLE clientes (
-            id_cliente INT IDENTITY(1,1) PRIMARY KEY,
-            nombre_cuenta VARCHAR(255) UNIQUE NOT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    `,
-    archivos_reporte: `
-        CREATE TABLE archivos_reporte (
-            id_reporte INT IDENTITY(1,1) PRIMARY KEY,
-            id_cliente INT NOT NULL,
-            nombre_archivo VARCHAR(255),
-            hash_archivo CHAR(64) UNIQUE NOT NULL,
-            uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (id_cliente) REFERENCES clientes(id_cliente)
-        )
-    `,
-    metricas: `
-        CREATE TABLE metricas (
-            id_metricas BIGINT IDENTITY(1,1) PRIMARY KEY,
-            id_reporte INT NOT NULL,
-            [nombre_de_la_campaña] VARCHAR(255),
-            [nombre_del_conjunto_de_anuncios] VARCHAR(255),
-            [nombre_del_anuncio] VARCHAR(255),
-            [dia] DATE,
-            [imagen_video_y_presentación] VARCHAR(255),
-            [col_6] VARCHAR(255),
-            [importe_gastado_EUR] DECIMAL(12,2),
-            [entrega_de_la_campaña] VARCHAR(50),
-            [entrega_del_conjunto_de_anuncios] VARCHAR(50),
-            [entrega_del_anuncio] VARCHAR(50),
-            [impresiones] BIGINT,
-            [alcance] BIGINT,
-            [frecuencia] DECIMAL(5,2),
-            [compras] INT,
-            [visitas_a_la_página_de_destino] INT,
-            [clics_todos] INT,
-            [cpm_costo_por_mil_impresiones] DECIMAL(12,2),
-            [ctr_todos] DECIMAL(5,2),
-            [cpc_todos] DECIMAL(12,2),
-            [reproducciones_3s] BIGINT,
-            [pagos_iniciados] INT,
-            [pct_compras_por_visitas_lp] DECIMAL(5,2),
-            [me_gusta_en_facebook] INT,
-            [artículos_agregados_al_carrito] INT,
-            [pagos_iniciados_web] INT,
-            [presupuesto_de_la_campaña] DECIMAL(12,2),
-            [tipo_de_presupuesto_de_la_campaña] VARCHAR(50),
-            [públicos_personalizados_incluidos] TEXT,
-            [públicos_personalizados_excluidos] TEXT,
-            [clics_en_el_enlace] INT,
-            [información_de_pago_agregada] INT,
-            [interacción_con_la_página] INT,
-            [comentarios_de_publicaciones] INT,
-            [interacciones_con_la_publicación] INT,
-            [reacciones_a_publicaciones] INT,
-            [veces_compartidas_publicaciones] INT,
-            [puja] DECIMAL(12,2),
-            [tipo_de_puja] VARCHAR(50),
-            [url_del_sitio_web] TEXT,
-            [ctr_link_click_pct] DECIMAL(5,2),
-            [divisa] VARCHAR(10),
-            [valor_de_conversión_compras] DECIMAL(12,2),
-            [objetivo] VARCHAR(100),
-            [tipo_de_compra] VARCHAR(50),
-            [inicio_del_informe] DATE,
-            [fin_del_informe] DATE,
-            [atencion] INT,
-            [deseo] INT,
-            [interes] INT,
-            [rep_video_25_pct] BIGINT,
-            [rep_video_50_pct] BIGINT,
-            [rep_video_100_pct] BIGINT,
-            [pct_rep_3s_por_impresiones] DECIMAL(5,2),
-            [aov] DECIMAL(12,2),
-            [lp_view_rate] DECIMAL(5,2),
-            [adc_lpv] DECIMAL(12,2),
-            [captura_de_video] INT,
-            [tasa_conv_landing] DECIMAL(5,2),
-            [pct_compras] DECIMAL(5,2),
-            [visualizaciones] INT,
-            [nombre_de_la_imagen] VARCHAR(255),
-            [cvr_link_click] DECIMAL(5,2),
-            [retencion_video_short] DECIMAL(5,2),
-            [retención_de_video] DECIMAL(5,2),
-            [rep_video_75_pct] BIGINT,
-            [rep_video_95_pct] BIGINT,
-            [tiempo_promedio_video] DECIMAL(6,2),
-            [thruplays] INT,
-            [rep_video] INT,
-            [rep_video_2s_unicas] INT,
-            [ctr_unico_enlace_pct] DECIMAL(5,2),
-            [nombre_de_la_cuenta] VARCHAR(255),
-            [impresiones_compras] INT,
-            [captura_video_final] INT,
-            inserted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (id_reporte) REFERENCES archivos_reporte(id_reporte)
-        )
-    `,
-    archivos_url: `
-        CREATE TABLE archivos_url (
-            id_url INT IDENTITY(1,1) PRIMARY KEY,
-            id_cliente INT NOT NULL,
-            nombre_archivo VARCHAR(255),
-            hash_archivo CHAR(64) UNIQUE NOT NULL,
-            uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (id_cliente) REFERENCES clientes(id_cliente)
-        )
-    `,
-    vistas_preview: `
-        CREATE TABLE vistas_preview (
-            id_cliente INT NOT NULL,
-            [Account name] VARCHAR(255),
-            [Ad name] VARCHAR(255),
-            [Reach] BIGINT,
-            [Ad Preview Link] TEXT,
-            [Ad Creative Thumbnail Url] TEXT,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (id_cliente, [Ad name]),
-            FOREIGN KEY (id_cliente) REFERENCES clientes(id_cliente)
-        )
-    `
-};
-
-// Order in which tables must be created and dropped
-const TABLE_CREATION_ORDER = ['clientes', 'archivos_reporte', 'metricas', 'archivos_url', 'vistas_preview'];
-const TABLE_DELETION_ORDER = ['metricas', 'archivos_url', 'vistas_preview', 'archivos_reporte', 'clientes'];
+// Table creation/deletion order calculated from dependencies
+const TABLE_CREATION_ORDER = getCreationOrder();
+const TABLE_DELETION_ORDER = getDeletionOrder();
 
 // Extract column names from the metricas table definition for dynamic inserts
 const METRIC_COLUMNS = SQL_TABLE_DEFINITIONS.metricas
@@ -200,7 +72,7 @@ const upload = multer({ storage });
 
 // Initialize database tables
 function initializeDatabase() {
-    console.log('[Server] Initializing SQLite database...');
+    logger.info('[Server] Initializing SQLite database...');
     
     // Table for general key-value storage
     db.exec(`
@@ -257,7 +129,7 @@ function initializeDatabase() {
         )
     `);
 
-    console.log('[Server] ✅ Database tables initialized');
+    logger.info('[Server] ✅ Database tables initialized');
 }
 
 // Initialize database on startup
@@ -303,11 +175,11 @@ app.post('/api/sql/connect', async (req, res) => {
         
         // Probar la conexión
         const result = await sqlPool.request().query('SELECT 1 as test');
-        console.log('[SQL] Conexión exitosa a SQL Server');
+        logger.info('[SQL] Conexión exitosa a SQL Server');
         
         res.json({ success: true });
     } catch (error) {
-        console.error('[SQL] Error al conectar:', error.message);
+        logger.error('[SQL] Error al conectar:', error.message);
         if (sqlPool) {
             await sqlPool.close().catch(() => {});
         }
@@ -318,13 +190,13 @@ app.post('/api/sql/connect', async (req, res) => {
 
 // --- Listar nombres de tablas en SQL Server ---
 app.get('/api/sql/tables', async (req, res) => {
-    console.log('[DEBUG] /api/sql/tables endpoint called');
+    logger.info('[DEBUG] /api/sql/tables endpoint called');
     if (!sqlPool) {
-        console.log('[DEBUG] sqlPool is null, not connected to SQL Server');
+        logger.info('[DEBUG] sqlPool is null, not connected to SQL Server');
         return res.status(400).json({ error: 'Not connected to SQL Server (pool is null)'});
     }
     try {
-        console.log('[DEBUG] sqlPool exists, attempting to query tables...');
+        logger.info('[DEBUG] sqlPool exists, attempting to query tables...');
         const result = await sqlPool.request().query(`
             SELECT TABLE_NAME
             FROM INFORMATION_SCHEMA.TABLES
@@ -332,10 +204,10 @@ app.get('/api/sql/tables', async (req, res) => {
             ORDER BY TABLE_NAME
         `);
         const tables = result.recordset.map(row => row.TABLE_NAME);
-        console.log('[DEBUG] Tables found:', tables);
+        logger.info('[DEBUG] Tables found:', tables);
         res.json({ tables });
     } catch (error) {
-        console.error('[SQL] Error al consultar tablas:', error.message);
+        logger.error('[SQL] Error al consultar tablas:', error.message);
         res.status(500).json({ error: error.message });
     }
 });
@@ -349,7 +221,7 @@ app.get('/api/sql/status', async (req, res) => {
         await sqlPool.request().query('SELECT 1 as test');
         res.json({ connected: true });
     } catch (error) {
-        console.error('[SQL] Error al verificar conexión:', error.message);
+        logger.error('[SQL] Error al verificar conexión:', error.message);
         if (sqlPool) {
             await sqlPool.close().catch(() => {});
         }
@@ -382,7 +254,7 @@ app.get('/api/sql/permissions', async (req, res) => {
             }
         });
     } catch (error) {
-        console.error('[SQL] Error al verificar permisos:', error.message);
+        logger.error('[SQL] Error al verificar permisos:', error.message);
         res.status(500).json({ error: error.message });
     }
 });
@@ -410,7 +282,7 @@ async function initSqlTables(req, res) {
         }
         res.json({ success: true, created });
     } catch (error) {
-        console.error('[SQL] Error creating tables:', error.message);
+        logger.error('[SQL] Error creating tables:', error.message);
         res.status(500).json({ success: false, error: error.message });
     }
 }
@@ -432,7 +304,7 @@ app.delete('/api/sql/tables', async (req, res) => {
         }
         res.json({ success: true });
     } catch (error) {
-        console.error('[SQL] Error dropping tables:', error.message);
+        logger.error('[SQL] Error dropping tables:', error.message);
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -450,7 +322,7 @@ app.delete('/api/sql/tables/data', async (req, res) => {
         }
         res.json({ success: true });
     } catch (error) {
-        console.error('[SQL] Error clearing table data:', error.message);
+        logger.error('[SQL] Error clearing table data:', error.message);
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -545,7 +417,7 @@ app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
 
         res.json({ success: true, message: `Imported ${inserted} rows for ${clientName}` });
     } catch (error) {
-        console.error('[SQL] Error importing Excel:', error.message);
+        logger.error('[SQL] Error importing Excel:', error.message);
         res.status(500).json({ success: false, error: error.message });
     } finally {
         fs.unlink(req.file.path, () => {});
@@ -572,7 +444,7 @@ app.post('/api/data/:table', (req, res) => {
         const { table } = req.params;
         const { data, key = null } = req.body;
 
-        console.log(`[Server] Saving data to table: ${table}, key: ${key}`);
+        logger.info(`[Server] Saving data to table: ${table}, key: ${key}`);
         
         const stmt = db.prepare(`
             INSERT OR REPLACE INTO app_data (table_name, data_key, data_value, updated_at)
@@ -581,7 +453,7 @@ app.post('/api/data/:table', (req, res) => {
         
         const result = stmt.run(table, key, JSON.stringify(data));
         
-        console.log(`[Server] ✅ Saved data to ${table}, row ID: ${result.lastInsertRowid}`);
+        logger.info(`[Server] ✅ Saved data to ${table}, row ID: ${result.lastInsertRowid}`);
         
         res.json({ 
             success: true, 
@@ -592,7 +464,7 @@ app.post('/api/data/:table', (req, res) => {
         });
         
     } catch (error) {
-        console.error('[Server] Error saving data:', error);
+        logger.error('[Server] Error saving data:', error);
         res.status(500).json({ 
             success: false, 
             error: error.message 
@@ -608,7 +480,7 @@ app.get('/api/data/:table', (req, res) => {
         const { table } = req.params;
         const { key } = req.query;
 
-        console.log(`[Server] Loading data from table: ${table}, key: ${key}`);
+        logger.info(`[Server] Loading data from table: ${table}, key: ${key}`);
         
         let stmt, rows;
         
@@ -619,10 +491,10 @@ app.get('/api/data/:table', (req, res) => {
             
             if (rows) {
                 const data = JSON.parse(rows.data_value);
-                console.log(`[Server] ✅ Found data for ${table}/${key}`);
+                logger.info(`[Server] ✅ Found data for ${table}/${key}`);
                 res.json({ success: true, data, metadata: { created_at: rows.created_at, updated_at: rows.updated_at } });
             } else {
-                console.log(`[Server] No data found for ${table}/${key}`);
+                logger.info(`[Server] No data found for ${table}/${key}`);
                 res.json({ success: true, data: null });
             }
         } else {
@@ -636,12 +508,12 @@ app.get('/api/data/:table', (req, res) => {
                 result[key] = JSON.parse(row.data_value);
             });
             
-            console.log(`[Server] ✅ Found ${rows.length} records for ${table}`);
+            logger.info(`[Server] ✅ Found ${rows.length} records for ${table}`);
             res.json({ success: true, data: result, count: rows.length });
         }
         
     } catch (error) {
-        console.error('[Server] Error loading data:', error);
+        logger.error('[Server] Error loading data:', error);
         res.status(500).json({ 
             success: false, 
             error: error.message 
@@ -657,7 +529,7 @@ app.delete('/api/data/:table', (req, res) => {
         const { table } = req.params;
         const { key } = req.query;
 
-        console.log(`[Server] Deleting data from table: ${table}, key: ${key}`);
+        logger.info(`[Server] Deleting data from table: ${table}, key: ${key}`);
         
         let stmt, result;
         
@@ -669,7 +541,7 @@ app.delete('/api/data/:table', (req, res) => {
             result = stmt.run(table);
         }
         
-        console.log(`[Server] ✅ Deleted ${result.changes} records from ${table}`);
+        logger.info(`[Server] ✅ Deleted ${result.changes} records from ${table}`);
         
         res.json({ 
             success: true, 
@@ -678,7 +550,7 @@ app.delete('/api/data/:table', (req, res) => {
         });
         
     } catch (error) {
-        console.error('[Server] Error deleting data:', error);
+        logger.error('[Server] Error deleting data:', error);
         res.status(500).json({ 
             success: false, 
             error: error.message 
@@ -693,7 +565,7 @@ app.post('/api/clients', (req, res) => {
     try {
         const { clients } = req.body;
         
-        console.log(`[Server] Saving ${clients.length} clients`);
+        logger.info(`[Server] Saving ${clients.length} clients`);
         
         const stmt = db.prepare(`
             INSERT OR REPLACE INTO clients (id, name, data, updated_at)
@@ -708,7 +580,7 @@ app.post('/api/clients', (req, res) => {
         
         transaction();
         
-        console.log(`[Server] ✅ Saved ${clients.length} clients`);
+        logger.info(`[Server] ✅ Saved ${clients.length} clients`);
         
         res.json({ 
             success: true, 
@@ -717,7 +589,7 @@ app.post('/api/clients', (req, res) => {
         });
         
     } catch (error) {
-        console.error('[Server] Error saving clients:', error);
+        logger.error('[Server] Error saving clients:', error);
         res.status(500).json({ 
             success: false, 
             error: error.message 
@@ -735,7 +607,7 @@ app.get('/api/clients', (req, res) => {
         
         const clients = rows.map(row => JSON.parse(row.data));
         
-        console.log(`[Server] ✅ Retrieved ${clients.length} clients`);
+        logger.info(`[Server] ✅ Retrieved ${clients.length} clients`);
         
         res.json({ 
             success: true, 
@@ -744,7 +616,7 @@ app.get('/api/clients', (req, res) => {
         });
         
     } catch (error) {
-        console.error('[Server] Error loading clients:', error);
+        logger.error('[Server] Error loading clients:', error);
         res.status(500).json({ 
             success: false, 
             error: error.message 
@@ -760,7 +632,7 @@ app.post('/api/performance/:clientId', (req, res) => {
         const { clientId } = req.params;
         const { records, batchId = `batch_${Date.now()}` } = req.body;
         
-        console.log(`[Server] Saving ${records.length} performance records for client ${clientId}`);
+        logger.info(`[Server] Saving ${records.length} performance records for client ${clientId}`);
         
         const stmt = db.prepare(`
             INSERT INTO performance_records (client_id, record_data, batch_id)
@@ -775,7 +647,7 @@ app.post('/api/performance/:clientId', (req, res) => {
         
         transaction();
         
-        console.log(`[Server] ✅ Saved ${records.length} performance records for ${clientId}`);
+        logger.info(`[Server] ✅ Saved ${records.length} performance records for ${clientId}`);
         
         res.json({ 
             success: true, 
@@ -786,7 +658,7 @@ app.post('/api/performance/:clientId', (req, res) => {
         });
         
     } catch (error) {
-        console.error('[Server] Error saving performance records:', error);
+        logger.error('[Server] Error saving performance records:', error);
         res.status(500).json({ 
             success: false, 
             error: error.message 
@@ -815,7 +687,7 @@ app.get('/api/performance', (req, res) => {
             performanceData[row.client_id].push(JSON.parse(row.record_data));
         });
         
-        console.log(`[Server] ✅ Retrieved performance data for ${Object.keys(performanceData).length} clients`);
+        logger.info(`[Server] ✅ Retrieved performance data for ${Object.keys(performanceData).length} clients`);
         
         res.json({ 
             success: true, 
@@ -825,7 +697,7 @@ app.get('/api/performance', (req, res) => {
         });
         
     } catch (error) {
-        console.error('[Server] Error loading performance data:', error);
+        logger.error('[Server] Error loading performance data:', error);
         res.status(500).json({ 
             success: false, 
             error: error.message 
@@ -845,7 +717,7 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
             });
         }
         
-        console.log(`[Server] ✅ File uploaded: ${req.file.filename}`);
+        logger.info(`[Server] ✅ File uploaded: ${req.file.filename}`);
         
         res.json({
             success: true,
@@ -858,7 +730,7 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
         });
         
     } catch (error) {
-        console.error('[Server] Error uploading file:', error);
+        logger.error('[Server] Error uploading file:', error);
         res.status(500).json({ 
             success: false, 
             error: error.message 
@@ -892,7 +764,7 @@ app.get('/api/stats', (req, res) => {
         const dbStats = fs.statSync(dbPath);
         const dbSizeKB = Math.round(dbStats.size / 1024);
         
-        console.log(`[Server] ✅ Database stats: ${totalRecords} total records, ${dbSizeKB}KB`);
+        logger.info(`[Server] ✅ Database stats: ${totalRecords} total records, ${dbSizeKB}KB`);
         
         res.json({
             success: true,
@@ -906,7 +778,7 @@ app.get('/api/stats', (req, res) => {
         });
         
     } catch (error) {
-        console.error('[Server] Error getting stats:', error);
+        logger.error('[Server] Error getting stats:', error);
         res.status(500).json({ 
             success: false, 
             error: error.message 
@@ -926,10 +798,10 @@ app.post('/api/clear', (req, res) => {
         tables.forEach(tableName => {
             const result = db.prepare(`DELETE FROM ${tableName}`).run();
             totalDeleted += result.changes;
-            console.log(`[Server] Cleared ${result.changes} records from ${tableName}`);
+            logger.info(`[Server] Cleared ${result.changes} records from ${tableName}`);
         });
         
-        console.log(`[Server] ✅ Cleared all data: ${totalDeleted} total records deleted`);
+        logger.info(`[Server] ✅ Cleared all data: ${totalDeleted} total records deleted`);
         
         res.json({
             success: true,
@@ -938,7 +810,7 @@ app.post('/api/clear', (req, res) => {
         });
         
     } catch (error) {
-        console.error('[Server] Error clearing data:', error);
+        logger.error('[Server] Error clearing data:', error);
         res.status(500).json({ 
             success: false, 
             error: error.message 
@@ -948,28 +820,28 @@ app.post('/api/clear', (req, res) => {
 
 // Start server
 app.listen(PORT, () => {
-    console.log(`\n🚀 Ver6 Local Server running on http://localhost:${PORT}`);
-    console.log(`📊 Database: ${dbPath}`);
-    console.log(`🔗 Health check: http://localhost:${PORT}/api/health`);
-    console.log(`📈 Stats: http://localhost:${PORT}/api/stats`);
-    console.log('');
-    console.log('API Endpoints:');
-    console.log('  POST /api/data/:table     - Save data');
-    console.log('  GET  /api/data/:table     - Get data');
-    console.log('  DELETE /api/data/:table   - Delete data');
-    console.log('  POST /api/clients         - Save clients');
-    console.log('  GET  /api/clients         - Get clients');
-    console.log('  POST /api/performance/:id - Save performance data');
-    console.log('  GET  /api/performance     - Get performance data');
-    console.log('  POST /api/upload          - Upload files');
-    console.log('  GET  /api/stats           - Database statistics');
-    console.log('  POST /api/clear           - Clear all data');
-    console.log('');
+    logger.info(`\n🚀 Ver6 Local Server running on http://localhost:${PORT}`);
+    logger.info(`📊 Database: ${dbPath}`);
+    logger.info(`🔗 Health check: http://localhost:${PORT}/api/health`);
+    logger.info(`📈 Stats: http://localhost:${PORT}/api/stats`);
+    logger.info('');
+    logger.info('API Endpoints:');
+    logger.info('  POST /api/data/:table     - Save data');
+    logger.info('  GET  /api/data/:table     - Get data');
+    logger.info('  DELETE /api/data/:table   - Delete data');
+    logger.info('  POST /api/clients         - Save clients');
+    logger.info('  GET  /api/clients         - Get clients');
+    logger.info('  POST /api/performance/:id - Save performance data');
+    logger.info('  GET  /api/performance     - Get performance data');
+    logger.info('  POST /api/upload          - Upload files');
+    logger.info('  GET  /api/stats           - Database statistics');
+    logger.info('  POST /api/clear           - Clear all data');
+    logger.info('');
 });
 
 // Graceful shutdown
 process.on('SIGINT', () => {
-    console.log('\n[Server] Shutting down gracefully...');
+    logger.info('\n[Server] Shutting down gracefully...');
     db.close();
     process.exit(0);
 });
