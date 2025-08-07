@@ -307,6 +307,7 @@ async function initSqlTables(req, res) {
         return res.status(400).json({ error: 'Not connected' });
     }
     const created = [];
+    const altered = [];
     try {
         for (const table of TABLE_CREATION_ORDER) {
             // Check if table exists
@@ -318,7 +319,17 @@ async function initSqlTables(req, res) {
                 created.push(table);
             }
         }
-        res.json({ success: true, created });
+
+        // Ensure required columns exist on existing tables
+        const columnCheck = await sqlPool
+            .request()
+            .query(`SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='archivos_reporte' AND COLUMN_NAME='days_detected'`);
+        if (columnCheck.recordset.length === 0) {
+            await sqlPool.request().query('ALTER TABLE archivos_reporte ADD days_detected INT');
+            altered.push('archivos_reporte.days_detected');
+        }
+
+        res.json({ success: true, created, altered });
     } catch (error) {
         logger.error('[SQL] Error creating tables:', error.message);
         res.status(500).json({ success: false, error: error.message });
