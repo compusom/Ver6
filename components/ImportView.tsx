@@ -62,6 +62,8 @@ const ImportCard: React.FC<{
 export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, lookerData, setLookerData, performanceData, setPerformanceData, bitacoraReports, setBitacoraReports, onSyncFromMeta, metaApiConfig, currentUser }) => {
     
     // Validación defensiva para props
+    // Modo de importación: Local o SQL
+    const [importMode, setImportMode] = useState<'local' | 'sql'>('local');
     const safeClients = Array.isArray(clients) ? clients : [];
     const safeLookerData = lookerData && typeof lookerData === 'object' ? lookerData : {};
     const safePerformanceData = performanceData && typeof performanceData === 'object' ? performanceData : {};
@@ -69,6 +71,28 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
     
     const [isProcessing, setIsProcessing] = useState(false);
     const [feedback, setFeedback] = useState<Feedback | null>(null);
+    // Nueva función para importar a SQL
+    const importExcelToSQL = async (file: File) => {
+        setIsProcessing(true);
+        setFeedback({ type: 'info', message: 'Enviando archivo a SQL Server...' });
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+            const response = await fetch('/api/sql/import-excel', {
+                method: 'POST',
+                body: formData,
+            });
+            if (!response.ok) {
+                throw new Error('Error al importar a SQL Server.');
+            }
+            const result = await response.json();
+            setFeedback({ type: 'success', message: `Importación a SQL exitosa: ${result.message || 'OK'}` });
+        } catch (error) {
+            setFeedback({ type: 'error', message: error instanceof Error ? error.message : 'Error inesperado.' });
+        } finally {
+            setIsProcessing(false);
+        }
+    };
     const [isNewClientsModalOpen, setIsNewClientsModalOpen] = useState(false);
     const [isTxtClientSelectorOpen, setIsTxtClientSelectorOpen] = useState(false);
     const [isApiSyncClientSelectorOpen, setIsApiSyncClientSelectorOpen] = useState(false);
@@ -248,13 +272,17 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
                     await processAndSaveLookerData(file, safeClients);
                 }
             } else {
-                const checkResult = await processPerformanceData(file, safeClients, safePerformanceData, source, true);
-                if ('newAccountNames' in checkResult && checkResult.newAccountNames.length > 0) {
-                    setNewAccountNames(checkResult.newAccountNames);
-                    setPendingXlsxFile({ file, source });
-                    setIsNewClientsModalOpen(true);
+                if (importMode === 'sql') {
+                    await importExcelToSQL(file);
                 } else {
-                    await processAndSaveFullData(file, source, safeClients);
+                    const checkResult = await processPerformanceData(file, safeClients, safePerformanceData, source, true);
+                    if ('newAccountNames' in checkResult && checkResult.newAccountNames.length > 0) {
+                        setNewAccountNames(checkResult.newAccountNames);
+                        setPendingXlsxFile({ file, source });
+                        setIsNewClientsModalOpen(true);
+                    } else {
+                        await processAndSaveFullData(file, source, safeClients);
+                    }
                 }
             }
         } catch (error) {
@@ -349,15 +377,36 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
 
     return (
         <div className="max-w-4xl mx-auto space-y-8 animate-fade-in">
-             <div className="bg-brand-surface rounded-lg p-6 shadow-lg space-y-6">
+            <div className="bg-brand-surface rounded-lg p-6 shadow-lg space-y-6">
                 <h2 className="text-2xl font-bold text-brand-text">Centro de Importación de Datos</h2>
-                
+                {/* Switch Local/SQL mejorado */}
+                <div className="flex items-center gap-4 mb-4">
+                    <span className="font-semibold text-brand-text">Modo de importación:</span>
+                    <div className="flex items-center bg-brand-border/30 rounded-lg px-2 py-1">
+                        <button
+                            type="button"
+                            className={`px-4 py-1 rounded-l-lg font-semibold focus:outline-none transition-colors ${importMode === 'local' ? 'bg-blue-600 text-white' : 'bg-transparent text-brand-text'}`}
+                            onClick={() => setImportMode('local')}
+                            disabled={importMode === 'local'}
+                        >
+                            Local
+                        </button>
+                        <button
+                            type="button"
+                            className={`px-4 py-1 rounded-r-lg font-semibold focus:outline-none transition-colors ${importMode === 'sql' ? 'bg-blue-600 text-white' : 'bg-transparent text-brand-text'}`}
+                            onClick={() => setImportMode('sql')}
+                            disabled={importMode === 'sql'}
+                        >
+                            SQL
+                        </button>
+                    </div>
+                    <span className="ml-2 text-xs text-brand-text-secondary">{importMode === 'local' ? 'Local (almacenamiento en navegador)' : 'SQL (envía datos al servidor SQL)'}</span>
+                </div>
                 {feedback && (
                     <div className={`p-4 rounded-md text-sm font-semibold ${feedback.type === 'success' ? 'bg-green-500/20 text-green-300' : feedback.type === 'error' ? 'bg-red-500/20 text-red-300' : 'bg-blue-500/20 text-blue-300'}`}>
                         {feedback.message}
                     </div>
                 )}
-                
                 <input type="file" ref={lookerInputRef} onChange={(e) => handleFileChange(e, 'looker')} accept=".xlsx" className="hidden" />
                 <input type="file" ref={metaInputRef} onChange={(e) => handleFileChange(e, 'meta')} accept=".xlsx" className="hidden" />
                 <input type="file" ref={txtInputRef} onChange={(e) => handleFileChange(e, 'txt')} accept=".txt" className="hidden" />
@@ -365,10 +414,10 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                     <ImportCard
                         title="Rendimiento (Meta)"
-                        description="Sube el XLSX exportado desde Meta Ads para importar los datos de rendimiento de las campañas."
+                        description={importMode === 'local' ? "Sube el XLSX exportado desde Meta Ads para importar los datos de rendimiento de las campañas." : "Sube el XLSX exportado desde Meta Ads para enviar los datos directamente al servidor SQL."}
                         icon={<svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" viewBox="0 0 20 20" fill="currentColor"><path d="M5 11a1 1 0 011-1h8a1 1 0 110 2H6a1 1 0 01-1-1z" /><path fillRule="evenodd" d="M3 3a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V3zm2 5a1 1 0 011-1h8a1 1 0 110 2H6a1 1 0 01-1-1zm-1 5a1 1 0 00-1 1v2a1 1 0 001 1h12a1 1 0 001-1v-2a1 1 0 00-1-1H4z" clipRule="evenodd" /></svg>}
                         onButtonClick={() => triggerFileUpload(metaInputRef)}
-                        buttonText="Subir XLSX de Meta"
+                        buttonText={importMode === 'local' ? "Subir XLSX de Meta" : "Enviar XLSX a SQL"}
                         disabled={isProcessing}
                     />
                     <ImportCard
@@ -379,7 +428,7 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
                         buttonText="Subir XLSX de Looker"
                         disabled={isProcessing}
                     />
-                     <ImportCard
+                    <ImportCard
                         title="Reporte Bitácora (TXT)"
                         description="Sube un reporte de bitácora en formato TXT para un análisis semanal o mensual detallado."
                         icon={<svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4zm2 6a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1zm1 3a1 1 0 100 2h6a1 1 0 100-2H7z" clipRule="evenodd" /></svg>}
@@ -388,7 +437,7 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
                         disabled={isProcessing}
                     />
                 </div>
-                 <div className="border-t border-brand-border pt-6">
+                <div className="border-t border-brand-border pt-6">
                     <h3 className="text-lg font-semibold text-brand-text mb-2">Sincronización API</h3>
                     <p className="text-sm text-brand-text-secondary mb-4">Sincroniza datos directamente desde la API de Meta para los clientes que tengan un "Nombre de Cuenta de Meta" configurado.</p>
                     <button
@@ -403,11 +452,8 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
             </div>
 
             <NewClientsModal isOpen={isNewClientsModalOpen} onClose={() => setIsNewClientsModalOpen(false)} newAccountNames={newAccountNames} onConfirm={handleCreateNewClients} />
-            
             <ClientSelectorModal isOpen={isTxtClientSelectorOpen} onClose={() => setIsTxtClientSelectorOpen(false)} clients={safeClients} onClientSelect={processTxtReport} title="Seleccionar Cliente para Reporte TXT" description="Elige a qué cliente pertenece este reporte de Bitácora."/>
-            
             <ClientSelectorModal isOpen={isApiSyncClientSelectorOpen} onClose={() => setIsApiSyncClientSelectorOpen(false)} clients={safeClients.filter(c => c.metaAccountName)} onClientSelect={onSyncFromMeta} title="Seleccionar Cliente para Sincronizar" description="Elige qué cliente quieres sincronizar desde la API de Meta."/>
-            
             <ImportHistory history={importHistory} setHistory={setImportHistory} setLookerData={setLookerData} />
         </div>
     );
