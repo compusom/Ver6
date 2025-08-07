@@ -1,11 +1,11 @@
 import React, { useEffect, useState } from 'react';
 
 export const SqlConnectionPanel: React.FC = () => {
-    const [server, setServer] = useState('nozomi.proxy.rlwy.net');
-    const [port, setPort] = useState('40699');
-    const [database, setDatabase] = useState('railway');
-    const [user, setUser] = useState('root');
-    const [password, setPassword] = useState('kAjHbnHcFQuxCFCtAdsE0IRXTwqmMsmv');
+    const [server, setServer] = useState('192.168.1.234');
+    const [port, setPort] = useState('1433');
+    const [database, setDatabase] = useState('MiAppDB');
+    const [user, setUser] = useState('MiAppUser');
+    const [password, setPassword] = useState('Cataclismoss305020');
 
     const [connected, setConnected] = useState(false);
     const [permissions, setPermissions] = useState<Record<string, number> | null>(null);
@@ -92,7 +92,7 @@ export const SqlConnectionPanel: React.FC = () => {
 
     return (
         <div className="mb-8">
-            <h3 className="text-xl font-bold text-brand-text mb-4">Conexión a MySQL</h3>
+            <h3 className="text-xl font-bold text-brand-text mb-4">Conexión a SQL Server</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
                 <label className="flex flex-col text-sm">
                     <span>Servidor</span>

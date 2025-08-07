@@ -19,7 +19,7 @@ import Database from 'better-sqlite3';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
-import mysql from 'mysql2/promise';
+import sql from 'mssql';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -122,29 +122,37 @@ initializeDatabase();
 
 // ==================== API ROUTES ====================
 
-// --- MySQL connection management ---
+// --- SQL Server connection management ---
 app.post('/api/sql/connect', async (req, res) => {
     const { server, port, database, user, password } = req.body;
     const config = {
-        host: server,
+        server: server,
         port: parseInt(port, 10),
-        database,
-        user,
-        password,
-        waitForConnections: true,
-        connectionLimit: 10,
+        database: database,
+        user: user,
+        password: password,
+        options: {
+            encrypt: false, // Para SQL Server Express local
+            trustServerCertificate: true, // Para certificados auto-firmados
+            enableArithAbort: true
+        }
     };
 
     try {
         if (sqlPool) {
-            await sqlPool.end();
+            await sqlPool.close();
         }
-        sqlPool = mysql.createPool(config);
-        await sqlPool.query('SELECT 1');
+        sqlPool = await new sql.ConnectionPool(config).connect();
+        
+        // Probar la conexión
+        const result = await sqlPool.request().query('SELECT 1 as test');
+        console.log('[SQL] Conexión exitosa a SQL Server');
+        
         res.json({ success: true });
     } catch (error) {
+        console.error('[SQL] Error al conectar:', error.message);
         if (sqlPool) {
-            await sqlPool.end().catch(() => {});
+            await sqlPool.close().catch(() => {});
         }
         sqlPool = null;
         res.status(500).json({ success: false, error: error.message });
@@ -156,14 +164,16 @@ app.get('/api/sql/status', async (req, res) => {
         return res.json({ connected: false });
     }
     try {
-
-        await sqlPool.query('SELECT 1');
+        // Probar la conexión con SQL Server
+        await sqlPool.request().query('SELECT 1 as test');
         res.json({ connected: true });
     } catch (error) {
-        await sqlPool.end().catch(() => {});
+        console.error('[SQL] Error al verificar conexión:', error.message);
+        if (sqlPool) {
+            await sqlPool.close().catch(() => {});
+        }
         sqlPool = null;
         res.json({ connected: false });
-
     }
 });
 
@@ -172,17 +182,26 @@ app.get('/api/sql/permissions', async (req, res) => {
         return res.status(400).json({ error: 'Not connected' });
     }
     try {
-        const [rows] = await sqlPool.query(
-            `SELECT 
-                SUM(privilege_type = 'SELECT') AS canSelect,
-                SUM(privilege_type = 'INSERT') AS canInsert,
-                SUM(privilege_type = 'UPDATE') AS canUpdate,
-                SUM(privilege_type = 'DELETE') AS canDelete
-            FROM information_schema.user_privileges
-            WHERE grantee = CONCAT("'", CURRENT_USER(), "'")`
-        );
-        res.json({ permissions: rows[0] });
+        // Para SQL Server, verificamos permisos básicos
+        const result = await sqlPool.request().query(`
+            SELECT 
+                HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'SELECT') as canSelect,
+                HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'INSERT') as canInsert,
+                HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'UPDATE') as canUpdate,
+                HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'DELETE') as canDelete
+        `);
+        
+        const permissions = result.recordset[0];
+        res.json({ 
+            permissions: {
+                canSelect: Boolean(permissions.canSelect),
+                canInsert: Boolean(permissions.canInsert),
+                canUpdate: Boolean(permissions.canUpdate),
+                canDelete: Boolean(permissions.canDelete)
+            }
+        });
     } catch (error) {
+        console.error('[SQL] Error al verificar permisos:', error.message);
         res.status(500).json({ error: error.message });
     }
 });

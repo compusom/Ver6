@@ -7,6 +7,31 @@ import { SqlConnectionPanel } from './SqlConnectionPanel';
 type TableKey = 'clients' | 'users' | 'performance_data' | 'looker_data' | 'bitacora_reports' | 'uploaded_videos' | 'import_history' | 'processed_files_hashes';
 
 export const ControlPanelView: React.FC = () => {
+    // Backend connection witness
+    const [backendPort, setBackendPort] = useState(() => localStorage.getItem('backend_port') || '3001');
+    const [backendStatus, setBackendStatus] = useState<'online' | 'offline' | 'checking'>('checking');
+    const [backendError, setBackendError] = useState('');
+
+    const checkBackend = useCallback(async () => {
+        setBackendStatus('checking');
+        setBackendError('');
+        try {
+            const res = await fetch(`http://localhost:${backendPort}/api/health`, { method: 'GET' });
+            if (res.ok) {
+                setBackendStatus('online');
+            } else {
+                setBackendStatus('offline');
+                setBackendError('No responde el backend en el puerto seleccionado.');
+            }
+        } catch (e) {
+            setBackendStatus('offline');
+            setBackendError('No responde el backend en el puerto seleccionado.');
+        }
+    }, [backendPort]);
+
+    useEffect(() => {
+        checkBackend();
+    }, [checkBackend]);
     const [status, setStatus] = useState<Record<TableKey, boolean>>({} as Record<TableKey, boolean>);
     const [loading, setLoading] = useState<Partial<Record<TableKey, boolean>>>({});
     const [isChecking, setIsChecking] = useState(false);
@@ -75,6 +100,37 @@ export const ControlPanelView: React.FC = () => {
 
     return (
         <div className="max-w-4xl mx-auto bg-brand-surface rounded-lg p-8 shadow-lg animate-fade-in space-y-8">
+            {/* Backend connection witness */}
+            <div className="mb-6 flex flex-col sm:flex-row items-center gap-4">
+                <div className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold text-sm ${backendStatus === 'online' ? 'bg-green-500/20 text-green-400' : backendStatus === 'checking' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-red-500/20 text-red-400'}`}
+                >
+                    {backendStatus === 'online' ? (
+                        <>
+                            <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" fill="green" /></svg>
+                            Backend ONLINE (puerto {backendPort})
+                        </>
+                    ) : backendStatus === 'checking' ? (
+                        <>
+                            <svg className="h-5 w-5 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" fill="yellow" /></svg>
+                            Verificando backend...
+                        </>
+                    ) : (
+                        <>
+                            <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" fill="red" /></svg>
+                            Backend OFFLINE
+                        </>
+                    )}
+                </div>
+                <div className="flex items-center gap-2">
+                    <label className="text-sm text-brand-text-secondary">Puerto backend:</label>
+                    <input type="number" min="1" max="65535" value={backendPort} onChange={e => {
+                        setBackendPort(e.target.value);
+                        localStorage.setItem('backend_port', e.target.value);
+                    }} className="p-2 rounded bg-brand-bg w-24" />
+                    <button onClick={checkBackend} className="bg-brand-border hover:bg-brand-border/70 text-brand-text font-bold py-2 px-4 rounded-lg shadow-md transition-colors text-sm">Reintentar</button>
+                </div>
+                {backendError && <span className="text-red-400 text-xs ml-2">{backendError}</span>}
+            </div>
             <SqlConnectionPanel />
             <div>
                 <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4 mb-4">
