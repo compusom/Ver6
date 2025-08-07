@@ -161,10 +161,13 @@ app.post('/api/sql/connect', async (req, res) => {
 
 // --- Listar nombres de tablas en SQL Server ---
 app.get('/api/sql/tables', async (req, res) => {
+    console.log('[DEBUG] /api/sql/tables endpoint called');
     if (!sqlPool) {
-        return res.status(400).json({ error: 'Not connected' });
+        console.log('[DEBUG] sqlPool is null, not connected to SQL Server');
+        return res.status(400).json({ error: 'Not connected to SQL Server (pool is null)'});
     }
     try {
+        console.log('[DEBUG] sqlPool exists, attempting to query tables...');
         const result = await sqlPool.request().query(`
             SELECT TABLE_NAME
             FROM INFORMATION_SCHEMA.TABLES
@@ -172,6 +175,7 @@ app.get('/api/sql/tables', async (req, res) => {
             ORDER BY TABLE_NAME
         `);
         const tables = result.recordset.map(row => row.TABLE_NAME);
+        console.log('[DEBUG] Tables found:', tables);
         res.json({ tables });
     } catch (error) {
         console.error('[SQL] Error al consultar tablas:', error.message);
