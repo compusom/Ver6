@@ -28,7 +28,7 @@ export const SqlConnectionPanel: React.FC = () => {
         } catch (error) {
             // Si el backend responde con HTML, mostrar mensaje claro
             const msg = error instanceof Error ? error.message : String(error);
-            if (msg.includes('Cannot GET')) {
+            if (msg.includes('Cannot GET') || msg.includes('Cannot POST')) {
                 setMessage('El backend no responde correctamente al endpoint de tablas SQL. Verifica la conexión y el backend.');
             } else {
                 setMessage(msg === 'Failed to fetch' ? 'No se pudo conectar con el backend' : msg);
@@ -174,7 +174,11 @@ export const SqlConnectionPanel: React.FC = () => {
             await fetchTables();
         } catch (error) {
             const msg = error instanceof Error ? error.message : String(error);
-            setMessage(msg === 'Failed to fetch' ? 'No se pudo conectar con el backend' : msg);
+            if (msg.includes('Cannot POST') || msg.includes('Cannot GET')) {
+                setMessage('El backend no responde correctamente al endpoint de inicialización de tablas');
+            } else {
+                setMessage(msg === 'Failed to fetch' ? 'No se pudo conectar con el backend' : msg);
+            }
         }
         setTableOpsLoading(false);
     };

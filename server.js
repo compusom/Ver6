@@ -388,8 +388,11 @@ app.get('/api/sql/permissions', async (req, res) => {
 });
 
 // --- Manage SQL Server tables ---
-// Creates all tables defined in SQL_TABLE_DEFINITIONS if they don't exist.
-app.post('/api/sql/init-tables', async (req, res) => {
+// Shared handler to initialize required tables if they are missing. Some users
+// have reported hitting this endpoint with GET in the browser, so we expose the
+// same logic for both GET and POST requests to avoid "Cannot POST"/"Cannot GET"
+// confusion.
+async function initSqlTables(req, res) {
     if (!sqlPool) {
         return res.status(400).json({ error: 'Not connected' });
     }
@@ -410,7 +413,11 @@ app.post('/api/sql/init-tables', async (req, res) => {
         console.error('[SQL] Error creating tables:', error.message);
         res.status(500).json({ success: false, error: error.message });
     }
-});
+}
+
+// Supports both POST (programmatic) and GET (manual browser check)
+app.post('/api/sql/init-tables', initSqlTables);
+app.get('/api/sql/init-tables', initSqlTables);
 
 // Drops all known tables (children first to respect FKs)
 app.delete('/api/sql/tables', async (req, res) => {
