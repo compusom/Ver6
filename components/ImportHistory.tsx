@@ -8,9 +8,11 @@ interface ImportHistoryProps {
     history: ImportBatch[];
     setHistory: React.Dispatch<React.SetStateAction<ImportBatch[]>>;
     setLookerData: React.Dispatch<React.SetStateAction<AllLookerData>>;
+    allowUndo?: boolean;
+    title?: string;
 }
 
-export const ImportHistory: React.FC<ImportHistoryProps> = ({ history, setHistory, setLookerData }) => {
+export const ImportHistory: React.FC<ImportHistoryProps> = ({ history, setHistory, setLookerData, allowUndo = true, title }) => {
     
     const handleUndo = async (batchId: string) => {
         if (!window.confirm('¿Seguro que quieres deshacer esta importación? Los datos añadidos serán eliminados.')) return;
@@ -65,7 +67,7 @@ export const ImportHistory: React.FC<ImportHistoryProps> = ({ history, setHistor
 
     return (
         <div className="bg-brand-surface rounded-lg p-6 shadow-lg mt-8">
-            <h3 className="text-xl font-bold text-brand-text mb-4">Historial de Importaciones Recientes</h3>
+            <h3 className="text-xl font-bold text-brand-text mb-4">{title || 'Historial de Importaciones Recientes'}</h3>
             <div className="overflow-x-auto">
                 <table className="w-full text-sm text-left text-brand-text-secondary">
                     <thead className="text-xs text-brand-text uppercase bg-brand-border/50">
@@ -75,7 +77,7 @@ export const ImportHistory: React.FC<ImportHistoryProps> = ({ history, setHistor
                             <th className="px-4 py-2">Archivo</th>
                             <th className="px-4 py-2">Cliente</th>
                             <th className="px-4 py-2">Descripción</th>
-                            <th className="px-4 py-2">Acción</th>
+                            {allowUndo && <th className="px-4 py-2">Acción</th>}
                         </tr>
                     </thead>
                     <tbody>
@@ -86,14 +88,16 @@ export const ImportHistory: React.FC<ImportHistoryProps> = ({ history, setHistor
                                 <td className="px-4 py-2 truncate max-w-xs" title={batch.fileName}>{batch.fileName}</td>
                                 <td className="px-4 py-2">{batch.clientName}</td>
                                 <td className="px-4 py-2">{batch.description}</td>
-                                <td className="px-4 py-2">
-                                    <button
-                                        onClick={() => handleUndo(batch.id)}
-                                        className="bg-red-600/20 text-red-400 hover:bg-red-600/40 text-xs font-bold py-1 px-2 rounded-md transition-colors"
-                                    >
-                                        Deshacer
-                                    </button>
-                                </td>
+                                {allowUndo && (
+                                    <td className="px-4 py-2">
+                                        <button
+                                            onClick={() => handleUndo(batch.id)}
+                                            className="bg-red-600/20 text-red-400 hover:bg-red-600/40 text-xs font-bold py-1 px-2 rounded-md transition-colors"
+                                        >
+                                            Deshacer
+                                        </button>
+                                    </td>
+                                )}
                             </tr>
                         ))}
                     </tbody>

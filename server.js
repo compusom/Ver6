@@ -541,20 +541,32 @@ app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
                 : null;
         const daysDetected = uniqueDays.size;
 
-        // Create report record
+        // Create or reuse report record
         const fileHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
-        const report = await sqlPool
+
+        // Check if this file was already imported
+        const existingReport = await sqlPool
             .request()
-            .input('id_cliente', sql.Int, clientId)
-            .input('nombre_archivo', sql.VarChar(255), req.file.originalname)
             .input('hash_archivo', sql.Char(64), fileHash)
-            .input('period_start', sql.Date, periodStart)
-            .input('period_end', sql.Date, periodEnd)
-            .input('days_detected', sql.Int, daysDetected)
-            .query(
-                'INSERT INTO archivos_reporte (id_cliente, nombre_archivo, hash_archivo, period_start, period_end, days_detected) OUTPUT INSERTED.id_reporte VALUES (@id_cliente, @nombre_archivo, @hash_archivo, @period_start, @period_end, @days_detected)'
-            );
-        const reportId = report.recordset[0].id_reporte;
+            .query('SELECT id_reporte FROM archivos_reporte WHERE hash_archivo = @hash_archivo');
+
+        let reportId;
+        if (existingReport.recordset.length > 0) {
+            reportId = existingReport.recordset[0].id_reporte;
+        } else {
+            const report = await sqlPool
+                .request()
+                .input('id_cliente', sql.Int, clientId)
+                .input('nombre_archivo', sql.VarChar(255), req.file.originalname)
+                .input('hash_archivo', sql.Char(64), fileHash)
+                .input('period_start', sql.Date, periodStart)
+                .input('period_end', sql.Date, periodEnd)
+                .input('days_detected', sql.Int, daysDetected)
+                .query(
+                    'INSERT INTO archivos_reporte (id_cliente, nombre_archivo, hash_archivo, period_start, period_end, days_detected) OUTPUT INSERTED.id_reporte VALUES (@id_cliente, @nombre_archivo, @hash_archivo, @period_start, @period_end, @days_detected)'
+                );
+            reportId = report.recordset[0].id_reporte;
+        }
 
         let inserted = 0;
         let updated = 0;
@@ -623,12 +635,14 @@ app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
         }
 
         const history = {
-            clientId,
+            id: crypto.randomUUID(),
+            timestamp: new Date().toISOString(),
+            source: 'sql',
+            fileName: req.file.originalname,
+            fileHash,
             clientName,
-            reportId,
-            inserted,
-            updated,
-            skipped,
+            description: `${inserted} insertados, ${updated} actualizados, ${skipped} omitidos`,
+            undoData: { type: 'sql', keys: [], clientId: String(clientId) },
             periodStart,
             periodEnd,
             daysDetected
@@ -641,6 +655,18 @@ app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
         res.status(500).json({ success: false, error: error.message });
     } finally {
         fs.unlink(req.file.path, () => {});
+    }
+});
+
+// Get SQL import history
+app.get('/api/sql/import-history', (req, res) => {
+    try {
+        const rows = db.prepare('SELECT batch_data FROM import_history ORDER BY created_at DESC').all();
+        const history = rows.map(r => JSON.parse(r.batch_data));
+        res.json({ success: true, history });
+    } catch (error) {
+        logger.error('[Server] Error loading SQL import history:', error);
+        res.status(500).json({ success: false, error: error.message });
     }
 });
 

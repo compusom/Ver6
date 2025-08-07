@@ -87,6 +87,7 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
             }
             const result = await response.json();
             setFeedback({ type: 'success', message: `Importación a SQL exitosa: ${result.message || 'OK'}` });
+            await loadSqlHistory();
         } catch (error) {
             setFeedback({ type: 'error', message: error instanceof Error ? error.message : 'Error inesperado.' });
         } finally {
@@ -100,15 +101,29 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
     const [pendingXlsxFile, setPendingXlsxFile] = useState<{ file: File, source: 'looker' | 'meta' } | null>(null);
     const [pendingTxtData, setPendingTxtData] = useState<{ content: string, file: File } | null>(null);
     const [importHistory, setImportHistory] = useState<ImportBatch[]>([]);
+    const [sqlImportHistory, setSqlImportHistory] = useState<ImportBatch[]>([]);
     
     const lookerInputRef = useRef<HTMLInputElement>(null);
     const metaInputRef = useRef<HTMLInputElement>(null);
     const txtInputRef = useRef<HTMLInputElement>(null);
 
+    async function loadSqlHistory() {
+        try {
+            const res = await fetch('/api/sql/import-history');
+            const data = await res.json();
+            if (data.success && Array.isArray(data.history)) {
+                setSqlImportHistory(data.history);
+            }
+        } catch (err) {
+            console.error('Error loading SQL import history:', err);
+        }
+    }
+
     useEffect(() => {
         db.getImportHistory().then(history => {
             setImportHistory(history.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()));
         });
+        loadSqlHistory();
     }, []);
 
     const addImportToHistory = async (batch: Omit<ImportBatch, 'id' | 'timestamp'>) => {
@@ -454,7 +469,8 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
             <NewClientsModal isOpen={isNewClientsModalOpen} onClose={() => setIsNewClientsModalOpen(false)} newAccountNames={newAccountNames} onConfirm={handleCreateNewClients} />
             <ClientSelectorModal isOpen={isTxtClientSelectorOpen} onClose={() => setIsTxtClientSelectorOpen(false)} clients={safeClients} onClientSelect={processTxtReport} title="Seleccionar Cliente para Reporte TXT" description="Elige a qué cliente pertenece este reporte de Bitácora."/>
             <ClientSelectorModal isOpen={isApiSyncClientSelectorOpen} onClose={() => setIsApiSyncClientSelectorOpen(false)} clients={safeClients.filter(c => c.metaAccountName)} onClientSelect={onSyncFromMeta} title="Seleccionar Cliente para Sincronizar" description="Elige qué cliente quieres sincronizar desde la API de Meta."/>
-            <ImportHistory history={importHistory} setHistory={setImportHistory} setLookerData={setLookerData} />
+            <ImportHistory title="Historial de Importaciones Local" history={importHistory} setHistory={setImportHistory} setLookerData={setLookerData} />
+            <ImportHistory title="Historial de Importaciones SQL" history={sqlImportHistory} setHistory={setSqlImportHistory} setLookerData={setLookerData} allowUndo={false} />
         </div>
     );
 };
