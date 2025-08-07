@@ -4,6 +4,7 @@ import ReactDOM from 'react-dom/client';
 // RESTORED: Back to main app with CSS support
 import App from './App';
 import './index.css'; // Our new CSS file
+import { NotificationProvider } from './components/NotificationProvider';
 // import MinimalApp from './MinimalApp';
 
 const rootElement = document.getElementById('root');
@@ -14,6 +15,8 @@ if (!rootElement) {
 const root = ReactDOM.createRoot(rootElement);
 root.render(
   <React.StrictMode>
-    <App />
+    <NotificationProvider>
+      <App />
+    </NotificationProvider>
   </React.StrictMode>
 );

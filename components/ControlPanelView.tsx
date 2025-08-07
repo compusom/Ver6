@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { notify } from './notificationService';
 import db from '../database';
 import Logger from '../Logger';
 import { SqlConnectionPanel } from './SqlConnectionPanel';
@@ -99,13 +100,13 @@ export const ControlPanelView: React.FC = () => {
                 }
             }
             addLog('✅ Base de datos limpiada con éxito. La aplicación se reiniciará.');
-            alert('Base de datos limpiada. La aplicación se recargará.');
+            notify('Base de datos limpiada. La aplicación se recargará.', 'success');
             // window.location.reload() ya se ejecuta arriba si existe
         } catch (e) {
             console.error('Error al limpiar la base de datos:', e);
             const errorMessage = e instanceof Error ? e.message : String(e);
             addLog(`❌ Error durante la limpieza: ${errorMessage}`);
-            alert('Ocurrió un error al intentar limpiar la base de datos.');
+            notify('Ocurrió un error al intentar limpiar la base de datos.', 'error');
         }
     };
 
@@ -226,7 +227,7 @@ export const ControlPanelView: React.FC = () => {
                                                         await checkTableStatus();
                                                     } catch (e) {
                                                         addLog(`❌ Error creando la tabla '${table.name}': ${e instanceof Error ? e.message : String(e)}`);
-                                                        alert('Error creando la tabla. Ver log.');
+                                                        notify('Error creando la tabla. Ver log.', 'error');
                                                     }
                                                     setLoading(l => ({ ...l, [table.key]: false }));
                                                 }}

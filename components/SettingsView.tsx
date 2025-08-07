@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
+import { notify } from './notificationService';
 import { MetaApiConfig } from '../types';
 import Logger from '../Logger';
 import { MCPConfigView } from './MCPConfigView';
@@ -37,7 +38,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ metaApiConfig, setMe
         if (success) {
             setMetaApiConfig(config);
             Logger.success('Meta API configuration saved.');
-            alert('Configuración guardada con éxito (simulado).');
+            notify('Configuración guardada con éxito (simulado).', 'success');
         } else {
              Logger.error('Meta API connection test failed.');
         }

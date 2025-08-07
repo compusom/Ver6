@@ -1,6 +1,8 @@
 import { Client, User, PerformanceRecord, AllLookerData, BitacoraReport, UploadedVideo, ImportBatch, MetaApiConfig, ProcessedHashes } from './types';
 import { indexedDBManager } from './lib/indexedDBManager';
 import { localServerClient } from './lib/localServerClient';
+import { notify } from './components/notificationService';
+import Logger from './Logger';
 
 /**
  * Pure IndexedDB Database Manager - Ver6 Sistema Híbrido
@@ -37,14 +39,14 @@ async function checkServerAvailability() {
         dbConnectionStatus.serverAvailable = available;
         
         if (available) {
-            console.log('[DB] 🟢 Local server is available - using server storage');
+            Logger.info('[DB] 🟢 Local server is available - using server storage');
         } else {
-            console.log('[DB] 🟡 Local server not available - using IndexedDB fallback');
+            Logger.info('[DB] 🟡 Local server not available - using IndexedDB fallback');
         }
         
         return available;
     } catch (error) {
-        console.warn('[DB] Error checking server availability:', error);
+        Logger.warn('[DB] Error checking server availability:', error);
         dbConnectionStatus.serverAvailable = false;
         return false;
     }
@@ -53,7 +55,7 @@ async function checkServerAvailability() {
 const checkConnection = () => {
     if (!dbConnectionStatus.connected) {
         const errorMsg = 'Database not connected. Please check configuration in Settings.';
-        console.error(`[DB] ${errorMsg}`);
+        Logger.error(`[DB] ${errorMsg}`);
         throw new Error(errorMsg);
     }
 };
@@ -72,16 +74,16 @@ const db = {
             dbConnectionStatus.connected = true;
             
             if (dbConnectionStatus.serverAvailable) {
-                console.log('[DB] ✅ Connected to Local Server (primary) + IndexedDB (fallback)');
+                Logger.info('[DB] ✅ Connected to Local Server (primary) + IndexedDB (fallback)');
             } else {
-                console.log('[DB] ✅ Connected to IndexedDB (server not available)');
+                Logger.info('[DB] ✅ Connected to IndexedDB (server not available)');
             }
             
             // Initialize with any critical data migration if needed
             await this.migrateFromLegacyStorage();
             
         } catch (error) {
-            console.error('[DB] ❌ Failed to connect to database:', error);
+            Logger.error('[DB] ❌ Failed to connect to database:', error);
             dbConnectionStatus.connected = false;
             throw error;
         }
@@ -92,7 +94,7 @@ const db = {
         if (table !== 'config' && table !== 'import_history' && table !== 'processed_files_hashes') {
             checkConnection();
         }
-        console.log(`[DB] Executing: SELECT * FROM ${table}`);
+        Logger.info(`[DB] Executing: SELECT * FROM ${table}`);
         
         // Critical authentication data from localStorage ONLY
         const criticalTables = ['users', 'logged_in_user', 'config'];
@@ -101,13 +103,13 @@ const db = {
                 const localData = localStorage.getItem(`db_${table}`);
                 if (localData) {
                     const result = JSON.parse(localData);
-                    console.log(`[DB] ✅ Retrieved ${table} from localStorage (critical auth data)`);
+                    Logger.info(`[DB] ✅ Retrieved ${table} from localStorage (critical auth data)`);
                     return result as T;
                 }
-                console.log(`[DB] No critical data found for ${table}, returning default`);
+                Logger.info(`[DB] No critical data found for ${table}, returning default`);
                 return defaultValue;
             } catch (error) {
-                console.error(`[DB] Error parsing localStorage data for ${table}:`, error);
+                Logger.error(`[DB] Error parsing localStorage data for ${table}:`, error);
                 return defaultValue;
             }
         }
@@ -117,11 +119,11 @@ const db = {
             try {
                 const serverData = await localServerClient.loadData<T>(table);
                 if (serverData !== null && !this.isEmptyData(serverData)) {
-                    console.log(`[DB] ✅ Retrieved ${table} from local server`);
+                    Logger.info(`[DB] ✅ Retrieved ${table} from local server`);
                     return serverData;
                 }
             } catch (error) {
-                console.warn(`[DB] Failed to load ${table} from server, falling back to IndexedDB:`, error);
+                Logger.warn(`[DB] Failed to load ${table} from server, falling back to IndexedDB:`, error);
                 // Fall through to IndexedDB
             }
         }
@@ -131,11 +133,11 @@ const db = {
             try {
                 const fileData = await this.loadFromProjectFile(table);
                 if (fileData !== null) {
-                    console.log(`[DB] ✅ Retrieved ${table} from project file`);
+                    Logger.info(`[DB] ✅ Retrieved ${table} from project file`);
                     return fileData as T;
                 }
             } catch (error) {
-                console.warn(`[DB] Could not load ${table} from project file:`, error);
+                Logger.warn(`[DB] Could not load ${table} from project file:`, error);
             }
         }
         
@@ -143,36 +145,36 @@ const db = {
         try {
             // Ensure connection before accessing IndexedDB
             if (!dbConnectionStatus.connected) {
-                console.warn(`[DB] Database not connected, trying to initialize for ${table}`);
+                Logger.warn(`[DB] Database not connected, trying to initialize for ${table}`);
                 await indexedDBManager.initialize();
                 dbConnectionStatus.connected = true;
             }
             
             const result = await this.retrieveFromIndexedDB(table);
             if (result !== null) {
-                console.log(`[DB] ✅ Retrieved ${table} from IndexedDB`);
+                Logger.info(`[DB] ✅ Retrieved ${table} from IndexedDB`);
                 return result as T;
             }
         } catch (indexedDbError) {
-            console.error(`[DB] ❌ IndexedDB retrieval failed for ${table}:`, indexedDbError);
+            Logger.error(`[DB] ❌ IndexedDB retrieval failed for ${table}:`, indexedDbError);
             
             // For non-critical data, try to return from project files as fallback
             if (table === 'processed_files_hashes') {
                 try {
                     const fileData = await this.loadFromProjectFile(table);
                     if (fileData !== null) {
-                        console.log(`[DB] ⚠️ Retrieved ${table} from project file (fallback)`);
+                        Logger.info(`[DB] ⚠️ Retrieved ${table} from project file (fallback)`);
                         return fileData as T;
                     }
                 } catch (fileError) {
-                    console.warn(`[DB] Project file fallback also failed for ${table}:`, fileError);
+                    Logger.warn(`[DB] Project file fallback also failed for ${table}:`, fileError);
                 }
             }
             
             throw new Error(`Failed to retrieve ${table} from IndexedDB: ${indexedDbError}`);
         }
 
-        console.log(`[DB] No data found for ${table}, returning default`);
+        Logger.info(`[DB] No data found for ${table}, returning default`);
         return defaultValue;
     },
 
@@ -181,8 +183,8 @@ const db = {
         if (table !== 'config' && table !== 'processed_files_hashes') {
             checkConnection();
         }
-        console.log(`[DB] Executing: UPDATE ${table} with new data...`);
-        console.log(`[DB] Data size: ${JSON.stringify(data).length} characters`);
+        Logger.info(`[DB] Executing: UPDATE ${table} with new data...`);
+        Logger.info(`[DB] Data size: ${JSON.stringify(data).length} characters`);
 
         // Critical authentication data stays in localStorage for immediate access
         const criticalTables = ['users', 'logged_in_user', 'config'];
@@ -190,12 +192,12 @@ const db = {
             try {
                 const dataString = JSON.stringify(data);
                 localStorage.setItem(`db_${table}`, dataString);
-                console.log(`[DB] ✅ Saved ${table} to localStorage (critical auth data)`);
+                Logger.info(`[DB] ✅ Saved ${table} to localStorage (critical auth data)`);
                 return;
             } catch (error) {
-                console.error(`[DB] Failed to save critical data ${table}:`, error);
+                Logger.error(`[DB] Failed to save critical data ${table}:`, error);
                 const errorMsg = `Error: No se pudieron guardar los datos críticos. ${error}`;
-                alert(errorMsg);
+                notify(errorMsg, 'error');
                 throw new Error(errorMsg);
             }
         }
@@ -206,23 +208,23 @@ const db = {
             try {
                 const success = await localServerClient.saveData(table, data);
                 if (success) {
-                    console.log(`[DB] ✅ Saved ${table} to local server`);
+                    Logger.info(`[DB] ✅ Saved ${table} to local server`);
                     
                     // Also save to IndexedDB as backup for important data
                     if (['clients', 'performance_data', 'looker_data'].includes(table)) {
                         try {
                             await this.routeToIndexedDB(table, data);
-                            console.log(`[DB] ✅ Also saved ${table} to IndexedDB backup`);
+                            Logger.info(`[DB] ✅ Also saved ${table} to IndexedDB backup`);
                         } catch (backupError) {
-                            console.warn(`[DB] IndexedDB backup failed for ${table}:`, backupError);
+                            Logger.warn(`[DB] IndexedDB backup failed for ${table}:`, backupError);
                         }
                     }
                     return;
                 } else {
-                    console.warn(`[DB] Failed to save ${table} to server, falling back to IndexedDB`);
+                    Logger.warn(`[DB] Failed to save ${table} to server, falling back to IndexedDB`);
                 }
             } catch (error) {
-                console.warn(`[DB] Server save error for ${table}, falling back to IndexedDB:`, error);
+                Logger.warn(`[DB] Server save error for ${table}, falling back to IndexedDB:`, error);
                 // Fall through to IndexedDB
             }
         }
@@ -231,18 +233,18 @@ const db = {
         if (table === 'processed_files_hashes') {
             try {
                 await this.saveToProjectFile(table, data);
-                console.log(`[DB] ✅ Saved ${table} to project file`);
+                Logger.info(`[DB] ✅ Saved ${table} to project file`);
                 
                 // Also try to save to IndexedDB as backup
                 try {
                     await this.routeToIndexedDB(table, data);
-                    console.log(`[DB] ✅ Also saved ${table} to IndexedDB as backup`);
+                    Logger.info(`[DB] ✅ Also saved ${table} to IndexedDB as backup`);
                 } catch (indexedDbError) {
-                    console.warn(`[DB] IndexedDB backup failed for ${table}:`, indexedDbError);
+                    Logger.warn(`[DB] IndexedDB backup failed for ${table}:`, indexedDbError);
                 }
                 return;
             } catch (error) {
-                console.error(`[DB] Failed to save ${table} to project file:`, error);
+                Logger.error(`[DB] Failed to save ${table} to project file:`, error);
                 // Fall through to IndexedDB as fallback
             }
         }
@@ -251,21 +253,21 @@ const db = {
         try {
             // Ensure connection before accessing IndexedDB
             if (!dbConnectionStatus.connected) {
-                console.warn(`[DB] Database not connected, trying to initialize for saving ${table}`);
+                Logger.warn(`[DB] Database not connected, trying to initialize for saving ${table}`);
                 await indexedDBManager.initialize();
                 dbConnectionStatus.connected = true;
             }
             
             await this.routeToIndexedDB(table, data);
-            console.log(`[DB] ✅ Successfully saved ${table} to IndexedDB`);
+            Logger.info(`[DB] ✅ Successfully saved ${table} to IndexedDB`);
             
             // Clean up any legacy storage versions
             this.cleanupLegacyStorage(table);
             
         } catch (indexedDbError) {
-            console.error(`[DB] ❌ IndexedDB save failed for ${table}:`, indexedDbError);
+            Logger.error(`[DB] ❌ IndexedDB save failed for ${table}:`, indexedDbError);
             const errorMsg = `Error: No se pudieron guardar los datos en IndexedDB. ${indexedDbError}`;
-            alert(errorMsg);
+            notify(errorMsg, 'error');
             throw new Error(errorMsg);
         }
     },
@@ -355,7 +357,7 @@ const db = {
                     const result: AllLookerData = {};
                     
                     if (clients.length === 0) {
-                        console.warn('[DB] No clients found, checking for creative data without client constraint');
+                        Logger.warn('[DB] No clients found, checking for creative data without client constraint');
                         // If no clients, try to get all creative data directly
                         const allCreativeData = await indexedDBManager.getAllCreativeData();
                         return allCreativeData;
@@ -368,21 +370,21 @@ const db = {
                                 result[client.id] = clientCreativeData;
                             }
                         } catch (error) {
-                            console.warn(`[DB] Failed to get creative data for client ${client.id}:`, error);
+                            Logger.warn(`[DB] Failed to get creative data for client ${client.id}:`, error);
                         }
                     }
                     
-                    console.log(`[DB] ✅ Retrieved creative data for ${Object.keys(result).length} clients from IndexedDB`);
+                    Logger.info(`[DB] ✅ Retrieved creative data for ${Object.keys(result).length} clients from IndexedDB`);
                     return result;
                 } catch (error) {
-                    console.error('[DB] Error retrieving looker_data from IndexedDB:', error);
+                    Logger.error('[DB] Error retrieving looker_data from IndexedDB:', error);
                     // Fallback: try to get all creative data without client filtering
                     try {
                         const allCreativeData = await indexedDBManager.getAllCreativeData();
-                        console.log('[DB] ⚠️ Retrieved creative data using fallback method');
+                        Logger.info('[DB] ⚠️ Retrieved creative data using fallback method');
                         return allCreativeData;
                     } catch (fallbackError) {
-                        console.error('[DB] Fallback also failed:', fallbackError);
+                        Logger.error('[DB] Fallback also failed:', fallbackError);
                         return {};
                     }
                 }
@@ -412,7 +414,7 @@ const db = {
 
     async clearTable(table: string): Promise<void> {
         checkConnection();
-        console.log(`[DB] Executing: DELETE FROM ${table} (clearing table)`);
+        Logger.info(`[DB] Executing: DELETE FROM ${table} (clearing table)`);
 
         try {
             // Clear from IndexedDB only
@@ -427,16 +429,16 @@ const db = {
             // Also clear any legacy localStorage data
             localStorage.removeItem(`db_${table}`);
             
-            console.log(`[DB] ✅ Cleared table ${table} from IndexedDB`);
+            Logger.info(`[DB] ✅ Cleared table ${table} from IndexedDB`);
         } catch (error) {
-            console.error(`[DB] Error clearing table ${table}:`, error);
+            Logger.error(`[DB] Error clearing table ${table}:`, error);
             throw error;
         }
     },
 
     async clearAllData(): Promise<void> {
         checkConnection();
-        console.log(`[DB] Executing: CLEAR ALL USER DATA`);
+        Logger.info(`[DB] Executing: CLEAR ALL USER DATA`);
 
         try {
             // Clear IndexedDB data
@@ -458,9 +460,9 @@ const db = {
             try {
                 const { projectFileStorage } = await import('./lib/projectFileStorage');
                 await projectFileStorage.deleteData('processed_files_hashes');
-                console.log('[DB] ✅ Archivo de hashes procesados eliminado del proyecto');
+                Logger.info('[DB] ✅ Archivo de hashes procesados eliminado del proyecto');
             } catch (e) {
-                console.warn('[DB] No se pudo eliminar el archivo de hashes procesados del proyecto:', e);
+                Logger.warn('[DB] No se pudo eliminar el archivo de hashes procesados del proyecto:', e);
             }
             
             // Clear analysis cache
@@ -470,16 +472,16 @@ const db = {
                 }
             });
             
-            console.log('[DB] ✅ All user data cleared successfully (auth data preserved)');
+            Logger.info('[DB] ✅ All user data cleared successfully (auth data preserved)');
             
         } catch (error) {
-            console.error('[DB] Error clearing data:', error);
+            Logger.error('[DB] Error clearing data:', error);
             throw error;
         }
     },
     
     async factoryReset(): Promise<void> {
-        console.log(`[DB] Executing: FACTORY RESET`);
+        Logger.info(`[DB] Executing: FACTORY RESET`);
         
         try {
             // Clear IndexedDB
@@ -488,9 +490,9 @@ const db = {
             // Clear all localStorage including auth
             localStorage.clear();
             
-            console.log(`[DB] ✅ Factory reset completed - all data cleared`);
+            Logger.info(`[DB] ✅ Factory reset completed - all data cleared`);
         } catch (error) {
-            console.error('[DB] Error during factory reset:', error);
+            Logger.error('[DB] Error during factory reset:', error);
             // Force clear localStorage even if IndexedDB fails
             localStorage.clear();
         }
@@ -500,7 +502,7 @@ const db = {
      * Migration utilities - ONLY from localStorage legacy
      */
     async migrateFromLegacyStorage(): Promise<void> {
-        console.log('[DB] Checking for legacy localStorage migration...');
+        Logger.info('[DB] Checking for legacy localStorage migration...');
         
         try {
             // Check for existing localStorage data that should be migrated
@@ -513,19 +515,19 @@ const db = {
                         const parsedData = JSON.parse(legacyData);
                         if (parsedData && !this.isEmptyData(parsedData)) {
                             await this.routeToIndexedDB(table, parsedData);
-                            console.log(`[DB] ✅ Migrated ${table} from localStorage to IndexedDB`);
+                            Logger.info(`[DB] ✅ Migrated ${table} from localStorage to IndexedDB`);
                             
                             // Remove legacy data after successful migration
                             localStorage.removeItem(`db_${table}`);
                         }
                     } catch (error) {
-                        console.warn(`[DB] Failed to migrate ${table} from localStorage:`, error);
+                        Logger.warn(`[DB] Failed to migrate ${table} from localStorage:`, error);
                     }
                 }
             }
             
         } catch (error) {
-            console.warn('[DB] Migration check failed:', error);
+            Logger.warn('[DB] Migration check failed:', error);
         }
     },
 
@@ -538,7 +540,7 @@ const db = {
             localStorage.removeItem(`db_${table}_storage`);
             // Note: No more universalFileStorage cleanup
         } catch (error) {
-            console.warn(`[DB] Legacy cleanup failed for ${table}:`, error);
+            Logger.warn(`[DB] Legacy cleanup failed for ${table}:`, error);
         }
     },
 
@@ -546,7 +548,7 @@ const db = {
         try {
             // Get IndexedDB stats
             indexedDBManager.getDatabaseStats().then(stats => {
-                console.log('[DB] IndexedDB Stats:', stats);
+                Logger.info('[DB] IndexedDB Stats:', stats);
             });
             
             // Get localStorage usage (now minimal - only auth data)
@@ -572,19 +574,19 @@ const db = {
             };
             
         } catch (error) {
-            console.warn('[DB] Error getting storage usage:', error);
+            Logger.warn('[DB] Error getting storage usage:', error);
             return { used: 'Unknown', quota: 'Unknown', items: 0 };
         }
     },
 
     async clearOldData(): Promise<void> {
-        console.log('[DB] Clearing old data to optimize storage...');
+        Logger.info('[DB] Clearing old data to optimize storage...');
         
         try {
             // IndexedDB handles this efficiently
-            console.log('[DB] ✅ Old data cleanup completed');
+            Logger.info('[DB] ✅ Old data cleanup completed');
         } catch (error) {
-            console.warn('[DB] Error during cleanup:', error);
+            Logger.warn('[DB] Error during cleanup:', error);
         }
     },
 
@@ -716,7 +718,7 @@ const db = {
         try {
             return await indexedDBManager.getPerformanceRecords(clientId);
         } catch (error) {
-            console.warn(`[DB] Failed to get performance data for client ${clientId}:`, error);
+            Logger.warn(`[DB] Failed to get performance data for client ${clientId}:`, error);
             return [];
         }
     },
@@ -725,7 +727,7 @@ const db = {
         try {
             return await indexedDBManager.getCreativeData(clientId);
         } catch (error) {
-            console.warn(`[DB] Failed to get creative data for client ${clientId}:`, error);
+            Logger.warn(`[DB] Failed to get creative data for client ${clientId}:`, error);
             return null;
         }
     },
@@ -734,7 +736,7 @@ const db = {
         try {
             return await indexedDBManager.getCampaignSummaries(clientId, dateRange);
         } catch (error) {
-            console.warn(`[DB] Failed to get campaign summaries for client ${clientId}:`, error);
+            Logger.warn(`[DB] Failed to get campaign summaries for client ${clientId}:`, error);
             return [];
         }
     },
@@ -743,7 +745,7 @@ const db = {
         try {
             return await indexedDBManager.getDatabaseStats();
         } catch (error) {
-            console.warn('[DB] Failed to get database stats:', error);
+            Logger.warn('[DB] Failed to get database stats:', error);
             return { error: 'Stats unavailable' };
         }
     },
@@ -772,10 +774,10 @@ const db = {
                 creativeDataByClient
             };
 
-            console.log('[DB] 🔍 Creative Data Debug:', debug);
+            Logger.info('[DB] 🔍 Creative Data Debug:', debug);
             return debug;
         } catch (error) {
-            console.error('[DB] Failed to debug creative data:', error);
+            Logger.error('[DB] Failed to debug creative data:', error);
             return {
                 totalClients: 0,
                 totalCreativeRecords: 0,
@@ -794,9 +796,9 @@ const db = {
         try {
             const { projectFileStorage } = await import('./lib/projectFileStorage');
             await projectFileStorage.saveData(filename, data);
-            console.log(`[DB] ✅ Saved ${filename} to project file storage`);
+            Logger.info(`[DB] ✅ Saved ${filename} to project file storage`);
         } catch (error) {
-            console.error(`[DB] Failed to save ${filename} to project file:`, error);
+            Logger.error(`[DB] Failed to save ${filename} to project file:`, error);
             throw error;
         }
     },
@@ -809,11 +811,11 @@ const db = {
             const { projectFileStorage } = await import('./lib/projectFileStorage');
             const data = await projectFileStorage.loadData<T>(filename);
             if (data) {
-                console.log(`[DB] ✅ Loaded ${filename} from project file storage`);
+                Logger.info(`[DB] ✅ Loaded ${filename} from project file storage`);
             }
             return data;
         } catch (error) {
-            console.error(`[DB] Failed to load ${filename} from project file:`, error);
+            Logger.error(`[DB] Failed to load ${filename} from project file:`, error);
             return null;
         }
     },
@@ -825,9 +827,9 @@ const db = {
         try {
             const { projectFileStorage } = await import('./lib/projectFileStorage');
             await projectFileStorage.exportData(filename, data);
-            console.log(`[DB] ✅ Exported ${filename} to project files`);
+            Logger.info(`[DB] ✅ Exported ${filename} to project files`);
         } catch (error) {
-            console.error(`[DB] Failed to export ${filename} to project file:`, error);
+            Logger.error(`[DB] Failed to export ${filename} to project file:`, error);
             throw error;
         }
     },
@@ -840,7 +842,7 @@ const db = {
             const { projectFileStorage } = await import('./lib/projectFileStorage');
             return await projectFileStorage.listFiles();
         } catch (error) {
-            console.error('[DB] Failed to list project files:', error);
+            Logger.error('[DB] Failed to list project files:', error);
             return [];
         }
     },
@@ -853,7 +855,7 @@ const db = {
             const { projectFileStorage } = await import('./lib/projectFileStorage');
             return await projectFileStorage.getStorageStats();
         } catch (error) {
-            console.error('[DB] Failed to get project storage stats:', error);
+            Logger.error('[DB] Failed to get project storage stats:', error);
             return {
                 filesCount: 0,
                 totalSize: '0 KB',

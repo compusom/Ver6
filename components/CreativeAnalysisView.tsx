@@ -1,4 +1,5 @@
 import React, { useState, useCallback }from 'react';
+import { notify } from './notificationService';
 import { Client, Creative, CreativeSet, FormatGroup, Language, AnalysisResult } from '../types';
 import { FileUpload } from './FileUpload';
 import { ClientSelectorModal } from './ClientSelectorModal';
@@ -101,11 +102,11 @@ export const CreativeAnalysisView: React.FC<CreativeAnalysisViewProps> = ({ clie
             if (clients.length > 0) {
                 setIsClientModalOpen(true);
             } else {
-                alert("No hay clientes creados. Por favor, crea un cliente en la pestaña 'Clientes' antes de continuar.");
+                notify("No hay clientes creados. Por favor, crea un cliente en la pestaña 'Clientes' antes de continuar.", 'error');
             }
         } catch (error: unknown) {
             Logger.error<unknown>('Error processing uploaded file', error);
-            alert("Hubo un error al procesar el archivo. Asegúrate de que es un formato de imagen o video válido.");
+            notify("Hubo un error al procesar el archivo. Asegúrate de que es un formato de imagen o video válido.", 'error');
             resetState();
         }
     };

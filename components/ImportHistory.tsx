@@ -1,4 +1,5 @@
 import React from 'react';
+import { notify } from './notificationService';
 import { ImportBatch, AllLookerData } from '../types';
 import db from '../database';
 import Logger from '../Logger';
@@ -50,11 +51,11 @@ export const ImportHistory: React.FC<ImportHistoryProps> = ({ history, setHistor
             await db.saveImportHistory(updatedHistory);
             
             Logger.success(`Successfully undone import batch: ${batchId}`);
-            alert('Importación deshecha con éxito.');
+            notify('Importación deshecha con éxito.', 'success');
 
         } catch (error: unknown) {
             Logger.error<unknown>(`Failed to undo import batch: ${batchId}`, error);
-            alert('Ocurrió un error al deshacer la importación.');
+            notify('Ocurrió un error al deshacer la importación.', 'error');
         }
     };
 

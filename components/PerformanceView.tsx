@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { notify } from './notificationService';
 import { Client, PerformanceRecord, AggregatedAdPerformance, AllLookerData, CreativeSet, AnalysisResult, UploadedVideo, Creative, AppView, AccountAverages, DemographicData, AdEvolutionMetrics } from '../types';
 import { AdPerformanceCard } from './AdPerformanceCard';
 import { AggregatedPerformanceTable } from './AggregatedPerformanceTable';
@@ -333,7 +334,7 @@ export const PerformanceView: React.FC<PerformanceViewProps> = ({ clients, getPe
         if (!selectedClient) return;
         const dataToAnalyze = aggregatedClientData.filter(ad => ad.isMatched && ad.creativeDescription);
         if (dataToAnalyze.length === 0) {
-            alert("No hay anuncios con análisis de IA en el período y filtro seleccionado. Genere o actualice análisis para algunos anuncios primero.");
+            notify("No hay anuncios con análisis de IA en el período y filtro seleccionado. Genere o actualice análisis para algunos anuncios primero.", 'info');
             return;
         }
 
@@ -390,7 +391,7 @@ export const PerformanceView: React.FC<PerformanceViewProps> = ({ clients, getPe
             }
         } catch (error) {
             const message = error instanceof Error ? error.message : "Error desconocido";
-            alert(`Error al analizar creativo para "${ad.adName}": ${message}`);
+            notify(`Error al analizar creativo para "${ad.adName}": ${message}`, 'error');
         } finally {
             setGeneratingAnalysis(prev => ({...prev, [ad.adName]: false}));
         }
@@ -413,7 +414,7 @@ export const PerformanceView: React.FC<PerformanceViewProps> = ({ clients, getPe
         }
     
         setBulkAnalysisState({ active: false, current: 0, total: 0 });
-        alert('Análisis en masa completado.');
+        notify('Análisis en masa completado.', 'success');
     };
 
     const handleShowAnalysisDetail = (ad: AggregatedAdPerformance) => { setSelectedAdForAnalysisDetail(ad); setIsAnalysisDetailModalOpen(true); };
@@ -495,7 +496,7 @@ export const PerformanceView: React.FC<PerformanceViewProps> = ({ clients, getPe
             const updatedVideos = [...uploadedVideos.filter(v => v.id !== newVideo.id), newVideo];
             setUploadedVideos(updatedVideos);
         } catch (error) {
-            alert("Ocurrió un error al guardar el video.");
+            notify("Ocurrió un error al guardar el video.", 'error');
         } finally {
             setIsVideoUploadModalOpen(false);
             setAdForVideoUpload(null);

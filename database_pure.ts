@@ -1,5 +1,6 @@
 import { Client, User, PerformanceRecord, AllLookerData, BitacoraReport, UploadedVideo, ImportBatch, MetaApiConfig, ProcessedHashes } from './types';
 import { indexedDBManager } from './lib/indexedDBManager';
+import { notify } from './components/notificationService';
 
 /**
  * Pure IndexedDB Database Manager - Ver6 Sistema 100% IndexedDB
@@ -118,7 +119,7 @@ const db = {
             } catch (error) {
                 console.error(`[DB] Failed to save critical data ${table}:`, error);
                 const errorMsg = `Error: No se pudieron guardar los datos críticos. ${error}`;
-                alert(errorMsg);
+                notify(errorMsg, 'error');
                 throw new Error(errorMsg);
             }
         }
@@ -134,7 +135,7 @@ const db = {
         } catch (indexedDbError) {
             console.error(`[DB] ❌ IndexedDB save failed for ${table}:`, indexedDbError);
             const errorMsg = `Error: No se pudieron guardar los datos en IndexedDB. ${indexedDbError}`;
-            alert(errorMsg);
+            notify(errorMsg, 'error');
             throw new Error(errorMsg);
         }
     },

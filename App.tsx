@@ -18,6 +18,7 @@ import { ReportsView } from './components/ReportsView';
 import { StrategicAnalysisView } from './components/StrategicAnalysisView';
 import db, { dbConnectionStatus } from './database';
 import Logger from './Logger';
+import { notify } from './components/notificationService';
 import { syncFromMetaAPI } from './lib/metaApiConnector';
 import { processPerformanceData } from './lib/dataProcessor';
 import { CreativeAnalysisView } from './components/CreativeAnalysisView';
@@ -720,7 +721,7 @@ ${demographicSummary || '  - No disponible'}
         } catch (error) {
             console.error("Error en el análisis de tendencias por IA:", error);
             const errorMessage = error instanceof Error ? error.message : "Ocurrió un error desconocido.";
-            alert(`Error al generar el análisis de tendencias: ${errorMessage}`);
+            notify(`Error al generar el análisis de tendencias: ${errorMessage}`, 'error');
             return { trends: [] };
         }
     }, []);
@@ -897,12 +898,12 @@ Responde ÚNICAMENTE en formato JSON estructurado según el esquema proporcionad
 
     const handleSyncFromMeta = async (clientId: string) => {
         if (!metaApiConfig) {
-            alert("La configuración de la API de Meta no está definida.");
+            notify("La configuración de la API de Meta no está definida.", 'error');
             return;
         }
         const client = clients.find(c => c.id === clientId);
         if (!client || !client.metaAccountName) {
-            alert("El cliente seleccionado no tiene un 'Nombre de Cuenta de Meta' configurado.");
+            notify("El cliente seleccionado no tiene un 'Nombre de Cuenta de Meta' configurado.", 'error');
             return;
         }
 
@@ -916,7 +917,7 @@ Responde ÚNICAMENTE en formato JSON estructurado según el esquema proporcionad
             }
             
             if (apiResults.length === 0) {
-                alert(`Sincronización completada. No se encontraron nuevos registros.`);
+                notify(`Sincronización completada. No se encontraron nuevos registros.`, 'info');
                 Logger.info(`Synced from Meta API for client ${client.name}. No new records.`);
                 setIsLoading(false);
                 return;
@@ -947,14 +948,14 @@ Responde ÚNICAMENTE en formato JSON estructurado según el esquema proporcionad
                 }
             }
             
-            alert(`Sincronización completada. Se añadieron ${totalNewRecords} nuevos registros.`);
+            notify(`Sincronización completada. Se añadieron ${totalNewRecords} nuevos registros.`, 'success');
             if(totalNewRecords > 0) {
                 Logger.success(`Synced from Meta API. Added ${totalNewRecords} records.`);
             }
 
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : 'Error desconocido';
-            alert(`Error durante la sincronización: ${message}`);
+            notify(`Error durante la sincronización: ${message}`, 'error');
             Logger.error<unknown>('Meta API sync failed', error);
         } finally {
             setIsLoading(false);

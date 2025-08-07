@@ -1,5 +1,6 @@
 
 import React, { useState } from 'react';
+import { notify } from './notificationService';
 import { User } from '../types';
 import { UserFormModal } from './UserFormModal';
 
@@ -35,7 +36,7 @@ export const UserManager: React.FC<UserManagerProps> = ({ users, setUsers, curre
 
     const handleDeleteUser = (userId: string) => {
         if (userId === currentUser.id) {
-            alert("No puedes eliminar tu propia cuenta de administrador.");
+            notify("No puedes eliminar tu propia cuenta de administrador.", 'error');
             return;
         }
         if (window.confirm('¿Seguro que quieres eliminar este usuario? Esta acción es irreversible.')) {
