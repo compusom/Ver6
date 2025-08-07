@@ -1008,6 +1008,23 @@ app.post('/api/clear', (req, res) => {
     }
 });
 
+// --- SQL Server terminal: ejecutar comandos SQL ---
+app.post('/api/sql/execute', async (req, res) => {
+    if (!sqlPool) {
+        return res.status(400).json({ success: false, error: 'No conectado a SQL Server' });
+    }
+    const { command } = req.body || {};
+    if (typeof command !== 'string' || !command.trim()) {
+        return res.status(400).json({ success: false, error: 'Comando vacío' });
+    }
+    try {
+        const result = await sqlPool.request().query(command);
+        res.json({ success: true, result: result.recordset });
+    } catch (error) {
+        res.status(200).json({ success: false, error: error.message });
+    }
+});
+
 // Start server
 app.listen(PORT, () => {
     logger.info(`\n🚀 Ver6 Local Server running on http://localhost:${PORT}`);

@@ -39,6 +39,33 @@ export const ControlPanelView: React.FC = () => {
     const [loading, setLoading] = useState<Partial<Record<TableKey, boolean>>>({});
     const [isChecking, setIsChecking] = useState(false);
     const [logs, setLogs] = useState<string[]>(['> Log de producción inicializado. Esperando comandos...']);
+    // Estado para el terminal SQL
+    const [sqlCommand, setSqlCommand] = useState('');
+    const [sqlResult, setSqlResult] = useState<string>('');
+    const [sqlLoading, setSqlLoading] = useState(false);
+
+    // Ejecuta el comando SQL en el backend
+    const handleRunSqlCommand = async () => {
+        if (!sqlCommand.trim()) return;
+        setSqlLoading(true);
+        setSqlResult('');
+        try {
+            const res = await fetch(`/api/sql/execute`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ command: sqlCommand })
+            });
+            const data = await res.json();
+            if (data.success) {
+                setSqlResult(JSON.stringify(data.result, null, 2));
+            } else {
+                setSqlResult('Error: ' + (data.error || 'Comando inválido'));
+            }
+        } catch (e) {
+            setSqlResult('Error de conexión o backend');
+        }
+        setSqlLoading(false);
+    };
 
     const addLog = (message: string) => {
         const timestamp = new Date().toLocaleTimeString();
@@ -267,7 +294,37 @@ export const ControlPanelView: React.FC = () => {
                 </>
             )}
             {dbMode === 'sql' && (
-                <SqlConnectionPanel />
+                <>
+                    <SqlConnectionPanel />
+                    {/* Terminal SQL */}
+                    <div className="mt-8 p-6 bg-brand-bg rounded-lg shadow-md">
+                        <h3 className="text-lg font-bold text-brand-text mb-2">Terminal SQL Server</h3>
+                        <p className="text-sm text-brand-text-secondary mb-2">Ejecuta comandos SQL directamente sobre la base conectada.</p>
+                        <textarea
+                            value={sqlCommand}
+                            onChange={e => setSqlCommand(e.target.value)}
+                            rows={4}
+                            className="w-full p-2 rounded bg-brand-border/10 font-mono text-brand-text mb-2"
+                            placeholder="Escribe tu comando SQL aquí..."
+                            disabled={sqlLoading}
+                        />
+                        <div className="flex gap-2">
+                            <button
+                                onClick={handleRunSqlCommand}
+                                className="bg-brand-border hover:bg-brand-border/70 text-brand-text font-bold py-2 px-4 rounded-lg shadow-md transition-colors text-sm"
+                                disabled={sqlLoading || !sqlCommand.trim()}
+                            >Ejecutar SQL</button>
+                            <button
+                                onClick={() => { setSqlCommand(''); setSqlResult(''); }}
+                                className="bg-brand-bg border border-brand-border text-brand-text font-bold py-2 px-4 rounded-lg shadow-md transition-colors text-sm"
+                                disabled={sqlLoading}
+                            >Limpiar</button>
+                        </div>
+                        <pre className="bg-brand-border/10 p-4 rounded-md font-mono text-xs text-brand-text-secondary mt-4 h-40 overflow-y-auto w-full">
+                            {sqlLoading ? 'Ejecutando...' : sqlResult}
+                        </pre>
+                    </div>
+                </>
             )}
         </div>
     );
