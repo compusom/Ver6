@@ -20,6 +20,8 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
 import sql from 'mssql';
+import xlsx from 'xlsx';
+import crypto from 'crypto';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -167,6 +169,13 @@ const SQL_TABLE_DEFINITIONS = {
 // Order in which tables must be created and dropped
 const TABLE_CREATION_ORDER = ['clientes', 'archivos_reporte', 'metricas', 'archivos_url', 'vistas_preview'];
 const TABLE_DELETION_ORDER = ['metricas', 'archivos_url', 'vistas_preview', 'archivos_reporte', 'clientes'];
+
+// Extract column names from the metricas table definition for dynamic inserts
+const METRIC_COLUMNS = SQL_TABLE_DEFINITIONS.metricas
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line.startsWith('['))
+    .map(line => line.slice(1, line.indexOf(']')));
 
 // Middleware
 app.use(cors());
@@ -436,6 +445,103 @@ app.delete('/api/sql/tables/data', async (req, res) => {
     } catch (error) {
         console.error('[SQL] Error clearing table data:', error.message);
         res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// --- Import Meta Excel data into SQL Server ---
+app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
+    if (!sqlPool) {
+        return res.status(400).json({ success: false, error: 'Not connected' });
+    }
+    if (!req.file) {
+        return res.status(400).json({ success: false, error: 'No file uploaded' });
+    }
+
+    // Helper to normalize column names to match SQL schema
+    const normalizeKey = (key) =>
+        key
+            .toString()
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .replace(/[^a-zA-Z0-9]+/g, '_')
+            .replace(/^_|_$/g, '')
+            .toLowerCase();
+
+    try {
+        const fileBuffer = fs.readFileSync(req.file.path);
+        const workbook = xlsx.read(fileBuffer, { type: 'buffer' });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const rows = xlsx.utils.sheet_to_json(sheet, { defval: null });
+
+        if (rows.length === 0) {
+            return res.status(400).json({ success: false, error: 'Excel file is empty' });
+        }
+
+        // Determine client from first row
+        const firstRow = rows[0];
+        const clientName =
+            firstRow['nombre_de_la_cuenta'] ||
+            firstRow['Nombre de la cuenta'] ||
+            firstRow['Account name'] ||
+            'desconocido';
+
+        // Ensure client exists
+        let result = await sqlPool
+            .request()
+            .input('nombre', sql.VarChar(255), clientName)
+            .query('SELECT id_cliente FROM clientes WHERE nombre_cuenta = @nombre');
+        let clientId;
+        if (result.recordset.length === 0) {
+            result = await sqlPool
+                .request()
+                .input('nombre', sql.VarChar(255), clientName)
+                .query('INSERT INTO clientes (nombre_cuenta) OUTPUT INSERTED.id_cliente VALUES (@nombre)');
+            clientId = result.recordset[0].id_cliente;
+        } else {
+            clientId = result.recordset[0].id_cliente;
+        }
+
+        // Create report record
+        const fileHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
+        const report = await sqlPool
+            .request()
+            .input('id_cliente', sql.Int, clientId)
+            .input('nombre_archivo', sql.VarChar(255), req.file.originalname)
+            .input('hash_archivo', sql.Char(64), fileHash)
+            .query(
+                'INSERT INTO archivos_reporte (id_cliente, nombre_archivo, hash_archivo) OUTPUT INSERTED.id_reporte VALUES (@id_cliente, @nombre_archivo, @hash_archivo)'
+            );
+        const reportId = report.recordset[0].id_reporte;
+
+        let inserted = 0;
+        for (const row of rows) {
+            const normalized = {};
+            for (const [k, v] of Object.entries(row)) {
+                const nk = normalizeKey(k);
+                if (METRIC_COLUMNS.includes(nk)) {
+                    normalized[nk] = v;
+                }
+            }
+            const cols = Object.keys(normalized);
+            if (cols.length === 0) continue;
+
+            const colNames = cols.map((c) => `[${c}]`).join(', ');
+            const params = cols.map((_, i) => `@p${i}`).join(', ');
+            const request = sqlPool.request();
+            cols.forEach((c, i) => request.input(`p${i}`, normalized[c]));
+            request.input('id_reporte', sql.Int, reportId);
+            await request.query(
+                `INSERT INTO metricas (${colNames}, id_reporte) VALUES (${params}, @id_reporte)`
+            );
+            inserted++;
+        }
+
+        res.json({ success: true, message: `Imported ${inserted} rows for ${clientName}` });
+    } catch (error) {
+        console.error('[SQL] Error importing Excel:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    } finally {
+        fs.unlink(req.file.path, () => {});
     }
 });
 
