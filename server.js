@@ -338,6 +338,7 @@ async function initSqlTables(req, res) {
         return res.status(400).json({ error: 'Not connected' });
     }
 
+
     const created = [];
     const altered = [];
     try {
@@ -360,6 +361,7 @@ async function initSqlTables(req, res) {
             await sqlPool.request().query('ALTER TABLE archivos_reporte ADD days_detected INT');
             altered.push('archivos_reporte.days_detected');
         }
+
 
 
         res.json({ success: true, created, altered });
