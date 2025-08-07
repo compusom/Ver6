@@ -446,9 +446,22 @@ const db = {
             const legacyKeys = [
                 'db_clients', 'db_performance_data', 'db_looker_data', 
                 'db_bitacora_reports', 'db_uploaded_videos', 'db_import_history',
-                'db_processed_files_hashes', 'current_client_id'
+                'db_processed_files_hashes', 'current_client_id',
+                'db_processed_hashes' // <-- Asegura borrar también esta clave si existe
             ];
             legacyKeys.forEach(key => localStorage.removeItem(key));
+
+            // Extra: Borra manualmente processed_hashes si existe fuera del array
+            localStorage.removeItem('db_processed_hashes');
+
+            // Borra el archivo de proyecto de hashes procesados
+            try {
+                const { projectFileStorage } = await import('./lib/projectFileStorage');
+                await projectFileStorage.deleteData('processed_files_hashes');
+                console.log('[DB] ✅ Archivo de hashes procesados eliminado del proyecto');
+            } catch (e) {
+                console.warn('[DB] No se pudo eliminar el archivo de hashes procesados del proyecto:', e);
+            }
             
             // Clear analysis cache
             Object.keys(localStorage).forEach(key => {
