@@ -457,7 +457,7 @@ export interface UploadedVideo {
     dataUrl: string;
 }
 
-export type ImportSource = 'looker' | 'meta' | 'txt' | 'api';
+export type ImportSource = 'looker' | 'meta' | 'txt' | 'api' | 'sql';
 export interface ImportBatch {
     id: string;
     timestamp: string;
