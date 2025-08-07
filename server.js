@@ -337,8 +337,31 @@ async function initSqlTables(req, res) {
     if (!sqlPool) {
         return res.status(400).json({ error: 'Not connected' });
     }
+
+    const created = [];
+    const altered = [];
     try {
-        const { created, altered } = await ensureSqlTables();
+        for (const table of TABLE_CREATION_ORDER) {
+            // Check if table exists
+            const exists = await sqlPool
+                .request()
+                .query(`SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='${table}'`);
+            if (exists.recordset.length === 0) {
+                await sqlPool.request().query(SQL_TABLE_DEFINITIONS[table]);
+                created.push(table);
+            }
+        }
+
+        // Ensure required columns exist on existing tables
+        const columnCheck = await sqlPool
+            .request()
+            .query(`SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='archivos_reporte' AND COLUMN_NAME='days_detected'`);
+        if (columnCheck.recordset.length === 0) {
+            await sqlPool.request().query('ALTER TABLE archivos_reporte ADD days_detected INT');
+            altered.push('archivos_reporte.days_detected');
+        }
+
+
         res.json({ success: true, created, altered });
     } catch (error) {
         logger.error('[SQL] Error creating tables:', error.message);
