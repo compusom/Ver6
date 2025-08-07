@@ -124,7 +124,7 @@ export const TrendsView: React.FC<TrendsViewProps> = ({ clients, lookerData, get
         
         setIsLoading(true);
         setAnalysisResult(null);
-        Logger.info('Starting trends analysis', { selectedClientId, startDate, endDate });
+        Logger.info<{ selectedClientId: string; startDate: string; endDate: string }>('Starting trends analysis', { selectedClientId, startDate, endDate });
 
         const client = safeClients.find(c => c.id === selectedClientId);
         if (!client) {

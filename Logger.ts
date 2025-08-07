@@ -3,7 +3,7 @@ export type LogEntry = {
     timestamp: Date;
     level: LogLevel;
     message: string;
-    context?: any;
+    context?: unknown;
 };
 type Subscriber = (log: LogEntry) => void;
 
@@ -21,7 +21,7 @@ class Logger {
         return Logger.instance;
     }
 
-    private addLog(level: LogLevel, message: string, context?: any) {
+    private addLog(level: LogLevel, message: string, context?: unknown) {
         const entry: LogEntry = { timestamp: new Date(), level, message, context };
         this.logs.push(entry);
         if (this.logs.length > 200) {
@@ -46,19 +46,19 @@ class Logger {
         }
     }
 
-    public info(message: string, context?: any) {
+    public info<TContext = unknown>(message: string, context?: TContext) {
         this.addLog('INFO', message, context);
     }
-    public success(message: string, context?: any) {
+    public success<TContext = unknown>(message: string, context?: TContext) {
         this.addLog('SUCCESS', message, context);
     }
-    public warn(message: string, context?: any) {
+    public warn<TContext = unknown>(message: string, context?: TContext) {
         this.addLog('WARNING', message, context);
     }
-    public error(message: string, context?: any) {
+    public error<TContext = unknown>(message: string, context?: TContext) {
         this.addLog('ERROR', message, context);
     }
-     public debug(message: string, context?: any) {
+     public debug<TContext = unknown>(message: string, context?: TContext) {
         this.addLog('DEBUG', message, context);
     }
 

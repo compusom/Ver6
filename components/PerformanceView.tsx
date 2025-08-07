@@ -405,7 +405,11 @@ export const PerformanceView: React.FC<PerformanceViewProps> = ({ clients, getPe
         for (let i = 0; i < adsToAnalyze.length; i++) {
             const ad = adsToAnalyze[i];
             setBulkAnalysisState(prev => ({ ...prev, current: i + 1 }));
-            try { await handleUpdateCreativeAnalysis(ad); } catch (error) { Logger.error(`Bulk analysis failed for ${ad.adName}, continuing...`, error); }
+            try {
+                await handleUpdateCreativeAnalysis(ad);
+            } catch (error: unknown) {
+                Logger.error<unknown>(`Bulk analysis failed for ${ad.adName}, continuing...`, error);
+            }
         }
     
         setBulkAnalysisState({ active: false, current: 0, total: 0 });

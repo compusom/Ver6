@@ -82,7 +82,7 @@ export const CreativeAnalysisView: React.FC<CreativeAnalysisViewProps> = ({ clie
     };
 
     const handleFileUpload = async (file: File) => {
-        Logger.info('File uploaded for analysis', { name: file.name, type: file.type });
+        Logger.info<{ name: string; type: string }>('File uploaded for analysis', { name: file.name, type: file.type });
         const objectUrl = URL.createObjectURL(file);
         
         try {
@@ -103,8 +103,8 @@ export const CreativeAnalysisView: React.FC<CreativeAnalysisViewProps> = ({ clie
             } else {
                 alert("No hay clientes creados. Por favor, crea un cliente en la pestaña 'Clientes' antes de continuar.");
             }
-        } catch (error) {
-            Logger.error('Error processing uploaded file', error);
+        } catch (error: unknown) {
+            Logger.error<unknown>('Error processing uploaded file', error);
             alert("Hubo un error al procesar el archivo. Asegúrate de que es un formato de imagen o video válido.");
             resetState();
         }
@@ -116,7 +116,7 @@ export const CreativeAnalysisView: React.FC<CreativeAnalysisViewProps> = ({ clie
             setSelectedClient(client);
             setIsClientModalOpen(false);
             setStep('select_format');
-            Logger.info('Client selected for analysis', { clientName: client.name });
+            Logger.info<{ clientName: string }>('Client selected for analysis', { clientName: client.name });
         }
     };
 
@@ -126,7 +126,7 @@ export const CreativeAnalysisView: React.FC<CreativeAnalysisViewProps> = ({ clie
         setSelectedFormat(formatGroup);
         setStep('analyzing');
         setIsLoading(true);
-        Logger.info('Format selected, starting AI analysis...', { formatGroup, clientName: selectedClient.name });
+        Logger.info<{ formatGroup: FormatGroup; clientName: string }>('Format selected, starting AI analysis...', { formatGroup, clientName: selectedClient.name });
 
         const context = `Análisis del creativo para el cliente "${selectedClient.name}".`;
         const isVideo = !!creativeSet.videoFile;

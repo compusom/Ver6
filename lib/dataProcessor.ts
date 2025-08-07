@@ -372,16 +372,15 @@ export const processPerformanceData = async (
         const uniqueDaysInImport = new Set<string>();
 
         clientJsonData.forEach(row => {
-            const record: Partial<PerformanceRecord> = { clientId: client!.id };
+            const record: Partial<PerformanceRecord> & Record<string, unknown> = { clientId: client!.id };
             const originalRow = originalHeaders.reduce((acc, key) => {
                 acc[normalizeHeader(key)] = row[key];
                 return acc;
-            }, {} as any);
-            
+            }, {} as Record<string, unknown>);
+
             Object.keys(columnMap).forEach(header => {
                 const mappedKey = columnMap[header];
                 if (mappedKey) {
-                    // @ts-ignore
                     record[mappedKey] = originalRow[header];
                 }
             });

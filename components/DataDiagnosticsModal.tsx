@@ -437,8 +437,8 @@ export const DataDiagnosticsModal: React.FC<DataDiagnosticsModalProps> = ({
                 Logger.info('La tabla de rendimiento ya está ONLINE.');
                 alert('La tabla de rendimiento ya está ONLINE.');
             }
-        } catch (e) {
-            Logger.error('Error creando la tabla de rendimiento.', { error: e });
+        } catch (e: unknown) {
+            Logger.error<{ error: unknown }>('Error creando la tabla de rendimiento.', { error: e });
             console.error('[DIAGNOSTICS] Error creando la tabla de rendimiento:', e);
             alert('Error creando la tabla de rendimiento. Ver consola y log.');
         }

@@ -16,8 +16,8 @@ export const ImportHistory: React.FC<ImportHistoryProps> = ({ history, setHistor
         
         const batchToUndo = history.find(b => b.id === batchId);
         if (!batchToUndo) return;
-        
-        Logger.warn(`Undoing import batch: ${batchId}`, batchToUndo);
+
+        Logger.warn<ImportBatch>(`Undoing import batch: ${batchId}`, batchToUndo);
         
         try {
             const { type, keys, clientId } = batchToUndo.undoData;
@@ -52,8 +52,8 @@ export const ImportHistory: React.FC<ImportHistoryProps> = ({ history, setHistor
             Logger.success(`Successfully undone import batch: ${batchId}`);
             alert('Importación deshecha con éxito.');
 
-        } catch (error) {
-            Logger.error(`Failed to undo import batch: ${batchId}`, error);
+        } catch (error: unknown) {
+            Logger.error<unknown>(`Failed to undo import batch: ${batchId}`, error);
             alert('Ocurrió un error al deshacer la importación.');
         }
     };
