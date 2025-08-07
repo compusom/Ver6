@@ -42,12 +42,50 @@ let sqlPool = null;
 const TABLE_CREATION_ORDER = getCreationOrder();
 const TABLE_DELETION_ORDER = getDeletionOrder();
 
-// Extract column names from the metricas table definition for dynamic inserts
-const METRIC_COLUMNS = SQL_TABLE_DEFINITIONS.metricas
+// Extract column definitions from the metricas table for dynamic inserts and
+// numeric conversion. Lines with the form "[column] TYPE" are parsed to obtain
+// both the name and its SQL type.
+const METRIC_COLUMN_DEFINITIONS = SQL_TABLE_DEFINITIONS.metricas
     .split('\n')
     .map(line => line.trim())
     .filter(line => line.startsWith('['))
-    .map(line => line.slice(1, line.indexOf(']')));
+    .map(line => {
+        const name = line.slice(1, line.indexOf(']'));
+        const type = line.slice(line.indexOf(']') + 1).replace(/[,\s]+$/g, '').trim();
+        return { name, type };
+    });
+
+const METRIC_COLUMNS = METRIC_COLUMN_DEFINITIONS.map(def => def.name);
+const NUMERIC_COLUMNS = new Set(
+    METRIC_COLUMN_DEFINITIONS.filter(def => /INT|DECIMAL|BIGINT|FLOAT|REAL/i.test(def.type)).map(def => def.name)
+);
+
+// Utility numeric parser mirroring the client-side logic
+const parseNumber = (value) => {
+    if (value === null || value === undefined) return 0;
+    if (typeof value === 'number') return value;
+    if (typeof value === 'string') {
+        const cleaned = value
+            .replace(/[€$]/g, '')
+            .trim()
+            .replace(/\./g, '')
+            .replace(/,/g, '.');
+        const num = parseFloat(cleaned);
+        return isNaN(num) ? 0 : num;
+    }
+    return 0;
+};
+
+// Helper for parsing dates of the form DD/MM/YYYY
+const parseDateForSort = (dateStr) => {
+    if (!dateStr || typeof dateStr !== 'string') return null;
+    const parts = dateStr.split('/');
+    if (parts.length === 3) {
+        return new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
+    }
+    const date = new Date(dateStr);
+    return isNaN(date.getTime()) ? null : date;
+};
 
 // Middleware
 app.use(cors());
@@ -336,6 +374,8 @@ app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
         return res.status(400).json({ success: false, error: 'No file uploaded' });
     }
 
+    const allowCreateClient = req.query.allowCreateClient === 'true';
+
     // Helper to normalize column names to match SQL schema
     const normalizeKey = (key) =>
         key
@@ -371,6 +411,9 @@ app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
             .query('SELECT id_cliente FROM clientes WHERE nombre_cuenta = @nombre');
         let clientId;
         if (result.recordset.length === 0) {
+            if (!allowCreateClient) {
+                return res.status(400).json({ success: false, error: `Client ${clientName} not found` });
+            }
             result = await sqlPool
                 .request()
                 .input('nombre', sql.VarChar(255), clientName)
@@ -380,6 +423,53 @@ app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
             clientId = result.recordset[0].id_cliente;
         }
 
+        const uniqueDays = new Set();
+        const records = [];
+        const fileUniqueIds = new Set();
+
+        for (const row of rows) {
+            const normalized = {};
+            const original = {};
+            for (const [k, v] of Object.entries(row)) {
+                const nk = normalizeKey(k);
+                original[nk] = v;
+                if (METRIC_COLUMNS.includes(nk)) {
+                    normalized[nk] = NUMERIC_COLUMNS.has(nk) ? parseNumber(v) : v;
+                }
+            }
+            const uniqueBase = `${original.dia || original.day}_${
+                original.nombre_de_la_campaña || original.campaign_name || ''
+            }_${
+                original.nombre_del_anuncio || original.ad_name || ''
+            }_${original.edad || original.age || ''}_${original.sexo || original.gender || ''}`;
+            const uniqueId = crypto.createHash('sha256').update(uniqueBase).digest('hex');
+            if (!uniqueBase || fileUniqueIds.has(uniqueId)) {
+                continue;
+            }
+            fileUniqueIds.add(uniqueId);
+            normalized.unique_id = uniqueId;
+            records.push(normalized);
+            const dayValue = original.dia || original.day;
+            if (dayValue) uniqueDays.add(dayValue);
+        }
+
+        const parsedDates = Array.from(uniqueDays)
+            .map(parseDateForSort)
+            .filter(d => d !== null);
+        const periodStart =
+            parsedDates.length > 0
+                ? new Date(Math.min(...parsedDates.map(d => d.getTime())))
+                      .toISOString()
+                      .split('T')[0]
+                : null;
+        const periodEnd =
+            parsedDates.length > 0
+                ? new Date(Math.max(...parsedDates.map(d => d.getTime())))
+                      .toISOString()
+                      .split('T')[0]
+                : null;
+        const daysDetected = uniqueDays.size;
+
         // Create report record
         const fileHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
         const report = await sqlPool
@@ -387,35 +477,94 @@ app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
             .input('id_cliente', sql.Int, clientId)
             .input('nombre_archivo', sql.VarChar(255), req.file.originalname)
             .input('hash_archivo', sql.Char(64), fileHash)
+            .input('period_start', sql.Date, periodStart)
+            .input('period_end', sql.Date, periodEnd)
+            .input('days_detected', sql.Int, daysDetected)
             .query(
-                'INSERT INTO archivos_reporte (id_cliente, nombre_archivo, hash_archivo) OUTPUT INSERTED.id_reporte VALUES (@id_cliente, @nombre_archivo, @hash_archivo)'
+                'INSERT INTO archivos_reporte (id_cliente, nombre_archivo, hash_archivo, period_start, period_end, days_detected) OUTPUT INSERTED.id_reporte VALUES (@id_cliente, @nombre_archivo, @hash_archivo, @period_start, @period_end, @days_detected)'
             );
         const reportId = report.recordset[0].id_reporte;
 
         let inserted = 0;
-        for (const row of rows) {
-            const normalized = {};
-            for (const [k, v] of Object.entries(row)) {
-                const nk = normalizeKey(k);
-                if (METRIC_COLUMNS.includes(nk)) {
-                    normalized[nk] = v;
+        let updated = 0;
+        let skipped = rows.length - records.length;
+
+        const transaction = new sql.Transaction(sqlPool);
+        await transaction.begin();
+        try {
+            const allParams = ['id_reporte', 'unique_id', ...METRIC_COLUMNS];
+            const insertPS = new sql.PreparedStatement(transaction);
+            allParams.forEach(col => {
+                if (col === 'id_reporte') insertPS.input(col, sql.Int);
+                else if (col === 'unique_id') insertPS.input(col, sql.Char(64));
+                else if (NUMERIC_COLUMNS.has(col)) insertPS.input(col, sql.Float);
+                else insertPS.input(col, sql.NVarChar);
+            });
+            await insertPS.prepare(
+                `INSERT INTO metricas (${allParams.map(c => `[${c}]`).join(', ')}) VALUES (${allParams
+                    .map(c => `@${c}`)
+                    .join(', ')})`
+            );
+
+            const updateCols = ['id_reporte', ...METRIC_COLUMNS];
+            const updatePS = new sql.PreparedStatement(transaction);
+            updatePS.input('unique_id', sql.Char(64));
+            updateCols.forEach(col => {
+                if (col === 'id_reporte') updatePS.input(col, sql.Int);
+                else if (NUMERIC_COLUMNS.has(col)) updatePS.input(col, sql.Float);
+                else updatePS.input(col, sql.NVarChar);
+            });
+            await updatePS.prepare(
+                `UPDATE metricas SET ${updateCols
+                    .map(c => `[${c}] = @${c}`)
+                    .join(', ')} WHERE unique_id = @unique_id`
+            );
+
+            for (const rec of records) {
+                rec.id_reporte = reportId;
+                const exists = await new sql.Request(transaction)
+                    .input('unique_id', sql.Char(64), rec.unique_id)
+                    .query('SELECT 1 FROM metricas WHERE unique_id = @unique_id');
+                if (exists.recordset.length > 0) {
+                    const updateParams = {};
+                    updateCols.forEach(col => {
+                        updateParams[col] = rec[col] ?? null;
+                    });
+                    updateParams.unique_id = rec.unique_id;
+                    await updatePS.execute(updateParams);
+                    updated++;
+                } else {
+                    const insertParams = {};
+                    allParams.forEach(col => {
+                        insertParams[col] = rec[col] ?? null;
+                    });
+                    await insertPS.execute(insertParams);
+                    inserted++;
                 }
             }
-            const cols = Object.keys(normalized);
-            if (cols.length === 0) continue;
 
-            const colNames = cols.map((c) => `[${c}]`).join(', ');
-            const params = cols.map((_, i) => `@p${i}`).join(', ');
-            const request = sqlPool.request();
-            cols.forEach((c, i) => request.input(`p${i}`, normalized[c]));
-            request.input('id_reporte', sql.Int, reportId);
-            await request.query(
-                `INSERT INTO metricas (${colNames}, id_reporte) VALUES (${params}, @id_reporte)`
-            );
-            inserted++;
+            await insertPS.unprepare();
+            await updatePS.unprepare();
+            await transaction.commit();
+        } catch (err) {
+            await transaction.rollback();
+            throw err;
         }
 
-        res.json({ success: true, message: `Imported ${inserted} rows for ${clientName}` });
+        const history = {
+            clientId,
+            clientName,
+            reportId,
+            inserted,
+            updated,
+            skipped,
+            periodStart,
+            periodEnd,
+            daysDetected
+        };
+        db.prepare('INSERT INTO import_history (batch_data) VALUES (?)').run(JSON.stringify(history));
+
+        res.json({ success: true, inserted, updated, skipped, clientName, periodStart, periodEnd });
     } catch (error) {
         logger.error('[SQL] Error importing Excel:', error.message);
         res.status(500).json({ success: false, error: error.message });

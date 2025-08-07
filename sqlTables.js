@@ -16,6 +16,9 @@ export const TABLES = {
             id_cliente INT NOT NULL,
             nombre_archivo VARCHAR(255),
             hash_archivo CHAR(64) UNIQUE NOT NULL,
+            period_start DATE,
+            period_end DATE,
+            days_detected INT,
             uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (id_cliente) REFERENCES clientes(id_cliente)
         )
@@ -27,6 +30,7 @@ export const TABLES = {
         CREATE TABLE metricas (
             id_metricas BIGINT IDENTITY(1,1) PRIMARY KEY,
             id_reporte INT NOT NULL,
+            [unique_id] CHAR(64) NOT NULL,
             [nombre_de_la_campaña] VARCHAR(255),
             [nombre_del_conjunto_de_anuncios] VARCHAR(255),
             [nombre_del_anuncio] VARCHAR(255),
@@ -102,6 +106,7 @@ export const TABLES = {
             [impresiones_compras] INT,
             [captura_video_final] INT,
             inserted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (unique_id, id_reporte),
             FOREIGN KEY (id_reporte) REFERENCES archivos_reporte(id_reporte)
         )
     `,
