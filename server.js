@@ -24,6 +24,7 @@ import xlsx from 'xlsx';
 import crypto from 'crypto';
 import logger from './serverLogger.js';
 import { SQL_TABLE_DEFINITIONS, getCreationOrder, getDeletionOrder } from './sqlTables.js';
+import { parseDateForSort } from './lib/parseDateForSort.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -42,6 +43,16 @@ let sqlPool = null;
 const TABLE_CREATION_ORDER = getCreationOrder();
 const TABLE_DELETION_ORDER = getDeletionOrder();
 
+// Helper to normalize column names to match SQL schema
+const normalizeKey = key =>
+    key
+        .toString()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-zA-Z0-9]+/g, '_')
+        .replace(/^_|_$/g, '')
+        .toLowerCase();
+
 // Extract column definitions from the metricas table for dynamic inserts and
 // numeric conversion. Lines with the form "[column] TYPE" are parsed to obtain
 // both the name and its SQL type.
@@ -55,7 +66,13 @@ const METRIC_COLUMN_DEFINITIONS = SQL_TABLE_DEFINITIONS.metricas
         return { name, type };
     });
 
-const METRIC_COLUMNS = METRIC_COLUMN_DEFINITIONS.map(def => def.name);
+// Map normalized column names to their actual SQL names
+const METRIC_COLUMN_MAP = new Map(
+    METRIC_COLUMN_DEFINITIONS.map(def => [normalizeKey(def.name), def.name])
+);
+
+// Arrays/Sets of actual SQL column names for query generation and numeric detection
+const METRIC_COLUMNS = Array.from(METRIC_COLUMN_MAP.values());
 const NUMERIC_COLUMNS = new Set(
     METRIC_COLUMN_DEFINITIONS.filter(def => /INT|DECIMAL|BIGINT|FLOAT|REAL/i.test(def.type)).map(def => def.name)
 );
@@ -74,17 +91,6 @@ const parseNumber = (value) => {
         return isNaN(num) ? 0 : num;
     }
     return 0;
-};
-
-// Helper for parsing dates of the form DD/MM/YYYY
-const parseDateForSort = (dateStr) => {
-    if (!dateStr || typeof dateStr !== 'string') return null;
-    const parts = dateStr.split('/');
-    if (parts.length === 3) {
-        return new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
-    }
-    const date = new Date(dateStr);
-    return isNaN(date.getTime()) ? null : date;
 };
 
 // Middleware
@@ -421,17 +427,6 @@ app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
     }
 
     const allowCreateClient = req.query.allowCreateClient === 'true';
-
-    // Helper to normalize column names to match SQL schema
-    const normalizeKey = (key) =>
-        key
-            .toString()
-            .normalize('NFD')
-            .replace(/[\u0300-\u036f]/g, '')
-            .replace(/[^a-zA-Z0-9]+/g, '_')
-            .replace(/^_|_$/g, '')
-            .toLowerCase();
-
     try {
         const fileBuffer = fs.readFileSync(req.file.path);
         const workbook = xlsx.read(fileBuffer, { type: 'buffer' });
@@ -479,12 +474,13 @@ app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
             for (const [k, v] of Object.entries(row)) {
                 const nk = normalizeKey(k);
                 original[nk] = v;
-                if (METRIC_COLUMNS.includes(nk)) {
-                    normalized[nk] = NUMERIC_COLUMNS.has(nk) ? parseNumber(v) : v;
+                const colName = METRIC_COLUMN_MAP.get(nk);
+                if (colName) {
+                    normalized[colName] = NUMERIC_COLUMNS.has(colName) ? parseNumber(v) : v;
                 }
             }
             const uniqueId = `${original.dia || original.day}_${
-                original.nombre_de_la_campaña || original.campaign_name || ''
+                original.nombre_de_la_campana || original.campaign_name || ''
             }_${
                 original.nombre_del_anuncio || original.ad_name || ''
             }_${original.edad || original.age || ''}_${original.sexo || original.gender || ''}`;

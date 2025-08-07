@@ -78,7 +78,7 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
         try {
             const formData = new FormData();
             formData.append('file', file);
-            const response = await fetch('/api/sql/import-excel', {
+            const response = await fetch('/api/sql/import-excel?allowCreateClient=true', {
                 method: 'POST',
                 body: formData,
             });
