@@ -36,11 +36,12 @@ export const SqlConnectionPanel: React.FC = () => {
         }
         setTablesLoading(false);
     };
-    const [server, setServer] = useState('192.168.1.234');
-    const [port, setPort] = useState('1433');
-    const [database, setDatabase] = useState('MiAppDB');
-    const [user, setUser] = useState('MiAppUser');
-    const [password, setPassword] = useState('Cataclismoss305020');
+    // Las credenciales deben ingresarse en tiempo de ejecución por el usuario
+    const [server, setServer] = useState(() => localStorage.getItem('sql_server') || '');
+    const [port, setPort] = useState(() => localStorage.getItem('sql_port') || '');
+    const [database, setDatabase] = useState(() => localStorage.getItem('sql_database') || '');
+    const [user, setUser] = useState(() => localStorage.getItem('sql_user') || '');
+    const [password, setPassword] = useState('');
 
     const [connected, setConnected] = useState(false);
     const [permissions, setPermissions] = useState<Record<string, number> | null>(null);
@@ -80,12 +81,11 @@ export const SqlConnectionPanel: React.FC = () => {
     useEffect(() => {
         checkStatus();
 
-        // Guardar las últimas credenciales en localStorage
+        // Guardar las últimas credenciales (excepto contraseña) en localStorage
         localStorage.setItem('sql_server', server);
         localStorage.setItem('sql_port', port);
         localStorage.setItem('sql_database', database);
         localStorage.setItem('sql_user', user);
-        localStorage.setItem('sql_password', password);
 
         // Intervalo para verificar y reconectar si se pierde la conexión
         const id = setInterval(async () => {
@@ -101,7 +101,7 @@ export const SqlConnectionPanel: React.FC = () => {
                         port: localStorage.getItem('sql_port') || port,
                         database: localStorage.getItem('sql_database') || database,
                         user: localStorage.getItem('sql_user') || user,
-                        password: localStorage.getItem('sql_password') || password,
+                        password,
                     }),
                 });
                 await checkStatus();

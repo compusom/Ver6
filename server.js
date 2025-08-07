@@ -258,13 +258,27 @@ initializeDatabase();
 
 // --- SQL Server connection management ---
 app.post('/api/sql/connect', async (req, res) => {
-    const { server, port, database, user, password } = req.body;
+    const { server, port, database, user, password } = req.body || {};
+
+    // Validación básica de parámetros
+    const portIsValid = typeof port === 'string' && /^\d+$/.test(port);
+    const portNumber = portIsValid ? parseInt(port, 10) : NaN;
+    if (
+        typeof server !== 'string' || !server.trim() ||
+        !portIsValid || portNumber < 1 || portNumber > 65535 ||
+        typeof database !== 'string' || !database.trim() ||
+        typeof user !== 'string' || !user.trim() ||
+        typeof password !== 'string' || !password.trim()
+    ) {
+        return res.status(400).json({ success: false, error: 'Invalid SQL connection parameters' });
+    }
+
     const config = {
-        server: server,
-        port: parseInt(port, 10),
-        database: database,
-        user: user,
-        password: password,
+        server,
+        port: portNumber,
+        database,
+        user,
+        password,
         options: {
             encrypt: false, // Para SQL Server Express local
             trustServerCertificate: true, // Para certificados auto-firmados

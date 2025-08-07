@@ -409,9 +409,9 @@ const App: React.FC = () => {
                 
                 console.log('🎉 [INIT] App initialization completed successfully!');
                 setIsLoading(false);
-            } catch (error) {
+            } catch (error: unknown) {
                 const message = error instanceof Error ? error.message : 'Unknown DB error';
-                Logger.error('Failed to load data from database.', { error: message });
+                Logger.error<{ error: string }>('Failed to load data from database.', { error: message });
                 console.error('❌ [INIT] Initialization failed:', error);
                 
                 // IMPROVED: Don't block UI on DB error, allow app to function with defaults
@@ -516,8 +516,8 @@ const App: React.FC = () => {
                         Logger.info(`[PERSISTENCE] Clients with performance data: ${clientIds.join(', ')}`);
                     }
                 })
-                .catch((error) => {
-                    Logger.error(`[PERSISTENCE] Failed to save performance data:`, error);
+                .catch((error: unknown) => {
+                    Logger.error<unknown>(`[PERSISTENCE] Failed to save performance data:`, error);
                 });
         }
     }, [performanceData]);
@@ -952,10 +952,10 @@ Responde ÚNICAMENTE en formato JSON estructurado según el esquema proporcionad
                 Logger.success(`Synced from Meta API. Added ${totalNewRecords} records.`);
             }
 
-        } catch (error) {
+        } catch (error: unknown) {
             const message = error instanceof Error ? error.message : 'Error desconocido';
             alert(`Error durante la sincronización: ${message}`);
-            Logger.error('Meta API sync failed', error);
+            Logger.error<unknown>('Meta API sync failed', error);
         } finally {
             setIsLoading(false);
         }

@@ -43,7 +43,7 @@ class SqlServerDatabase {
             
             // Configurar eventos
             this.pool.on('error', (err) => {
-                Logger.error('❌ Error en pool de SQL Server:', err);
+                Logger.error<unknown>('❌ Error en pool de SQL Server:', err);
                 this.isConnected = false;
             });
 
@@ -55,7 +55,7 @@ class SqlServerDatabase {
             return true;
 
         } catch (error) {
-            Logger.error('❌ Error al conectar a SQL Server:', error);
+            Logger.error<unknown>('❌ Error al conectar a SQL Server:', error);
             this.isConnected = false;
             return false;
         }
@@ -80,7 +80,7 @@ class SqlServerDatabase {
             const serverInfo = result.recordset[0];
             
             Logger.success('🎉 Test de conexión SQL Server exitoso');
-            Logger.info('📊 Información del servidor:', serverInfo);
+            Logger.info<Record<string, unknown>>('📊 Información del servidor:', serverInfo);
 
             return {
                 success: true,
@@ -90,7 +90,7 @@ class SqlServerDatabase {
 
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
-            Logger.error('❌ Test de conexión falló:', errorMessage);
+            Logger.error<string>('❌ Test de conexión falló:', errorMessage);
             
             return {
                 success: false,
@@ -118,7 +118,7 @@ class SqlServerDatabase {
             return result;
 
         } catch (error) {
-            Logger.error('❌ Error ejecutando query SQL:', error);
+            Logger.error<unknown>('❌ Error ejecutando query SQL:', error);
             throw error;
         }
     }
@@ -132,7 +132,7 @@ class SqlServerDatabase {
                 Logger.info('🔌 Desconectado de SQL Server');
             }
         } catch (error) {
-            Logger.error('❌ Error al desconectar SQL Server:', error);
+            Logger.error<unknown>('❌ Error al desconectar SQL Server:', error);
         }
     }
 
