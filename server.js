@@ -159,6 +159,26 @@ app.post('/api/sql/connect', async (req, res) => {
     }
 });
 
+// --- Listar nombres de tablas en SQL Server ---
+app.get('/api/sql/tables', async (req, res) => {
+    if (!sqlPool) {
+        return res.status(400).json({ error: 'Not connected' });
+    }
+    try {
+        const result = await sqlPool.request().query(`
+            SELECT TABLE_NAME
+            FROM INFORMATION_SCHEMA.TABLES
+            WHERE TABLE_TYPE = 'BASE TABLE'
+            ORDER BY TABLE_NAME
+        `);
+        const tables = result.recordset.map(row => row.TABLE_NAME);
+        res.json({ tables });
+    } catch (error) {
+        console.error('[SQL] Error al consultar tablas:', error.message);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 app.get('/api/sql/status', async (req, res) => {
     if (!sqlPool) {
         return res.json({ connected: false });

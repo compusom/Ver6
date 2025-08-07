@@ -7,6 +7,8 @@ import { SqlConnectionPanel } from './SqlConnectionPanel';
 type TableKey = 'clients' | 'users' | 'performance_data' | 'looker_data' | 'bitacora_reports' | 'uploaded_videos' | 'import_history' | 'processed_files_hashes';
 
 export const ControlPanelView: React.FC = () => {
+    // Selector de modo de base de datos
+    const [dbMode, setDbMode] = useState<'local' | 'sql'>(localStorage.getItem('db_mode') === 'sql' ? 'sql' : 'local');
     // Backend connection witness
     const [backendPort, setBackendPort] = useState(() => localStorage.getItem('backend_port') || '3001');
     const [backendStatus, setBackendStatus] = useState<'online' | 'offline' | 'checking'>('checking');
@@ -87,9 +89,18 @@ export const ControlPanelView: React.FC = () => {
         try {
             addLog('☢️ Iniciando protocolo de limpieza de datos de la base de datos...');
             await db.clearAllData();
+            // Recargar hashes procesados en el frontend tras limpiar la base
+            if (window.location.reload) {
+                window.location.reload();
+            } else {
+                // Si no se puede recargar, fuerza actualización de estado global
+                if (window.getProcessedHashes) {
+                    window.getProcessedHashes();
+                }
+            }
             addLog('✅ Base de datos limpiada con éxito. La aplicación se reiniciará.');
             alert('Base de datos limpiada. La aplicación se recargará.');
-            window.location.reload();
+            // window.location.reload() ya se ejecuta arriba si existe
         } catch (e) {
             console.error('Error al limpiar la base de datos:', e);
             const errorMessage = e instanceof Error ? e.message : String(e);
@@ -100,141 +111,163 @@ export const ControlPanelView: React.FC = () => {
 
     return (
         <div className="max-w-4xl mx-auto bg-brand-surface rounded-lg p-8 shadow-lg animate-fade-in space-y-8">
-            {/* Backend connection witness */}
+            {/* Selector de modo de base de datos */}
             <div className="mb-6 flex flex-col sm:flex-row items-center gap-4">
-                <div className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold text-sm ${backendStatus === 'online' ? 'bg-green-500/20 text-green-400' : backendStatus === 'checking' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-red-500/20 text-red-400'}`}
+                <label className="text-sm text-brand-text-secondary font-bold">Modo de base de datos:</label>
+                <select
+                    value={dbMode}
+                    onChange={e => {
+                        setDbMode(e.target.value as 'local' | 'sql');
+                        localStorage.setItem('db_mode', e.target.value);
+                    }}
+                    className="p-2 rounded bg-brand-bg w-32 font-bold"
                 >
-                    {backendStatus === 'online' ? (
-                        <>
-                            <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" fill="green" /></svg>
-                            Backend ONLINE (puerto {backendPort})
-                        </>
-                    ) : backendStatus === 'checking' ? (
-                        <>
-                            <svg className="h-5 w-5 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" fill="yellow" /></svg>
-                            Verificando backend...
-                        </>
-                    ) : (
-                        <>
-                            <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" fill="red" /></svg>
-                            Backend OFFLINE
-                        </>
-                    )}
-                </div>
-                <div className="flex items-center gap-2">
-                    <label className="text-sm text-brand-text-secondary">Puerto backend:</label>
-                    <input type="number" min="1" max="65535" value={backendPort} onChange={e => {
-                        setBackendPort(e.target.value);
-                        localStorage.setItem('backend_port', e.target.value);
-                    }} className="p-2 rounded bg-brand-bg w-24" />
-                    <button onClick={checkBackend} className="bg-brand-border hover:bg-brand-border/70 text-brand-text font-bold py-2 px-4 rounded-lg shadow-md transition-colors text-sm">Reintentar</button>
-                </div>
-                {backendError && <span className="text-red-400 text-xs ml-2">{backendError}</span>}
+                    <option value="local">Local</option>
+                    <option value="sql">SQL Server</option>
+                </select>
+                <span className="text-xs text-brand-text-secondary">Selecciona el modo para pruebas y operaciones</span>
             </div>
-            <SqlConnectionPanel />
-            <div>
-                <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4 mb-4">
-                    <div>
-                        <h2 className="text-2xl font-bold text-brand-text mb-2">Panel de Control de la Base de Datos</h2>
-                        <p className="text-brand-text-secondary">
-                            Gestiona las "tablas" de la base de datos simulada de la aplicación.
-                        </p>
-                    </div>
-                     <button
-                        onClick={checkTableStatus}
-                        disabled={isChecking}
-                        className="bg-brand-border hover:bg-brand-border/70 text-brand-text font-bold py-2 px-4 rounded-lg shadow-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center sm:justify-start gap-2"
-                    >
-                         <svg xmlns="http://www.w3.org/2000/svg" className={`h-5 w-5 ${isChecking ? 'animate-spin' : ''}`} viewBox="0 0 20 20" fill="currentColor">
-                            <path d="M7 3a1 1 0 000 2h6a1 1 0 100-2H7zM4 7a1 1 0 011-1h10a1 1 0 110 2H5a1 1 0 01-1-1zM2 11a2 2 0 012-2h12a2 2 0 012 2v4a2 2 0 01-2 2H4a2 2 0 01-2-2v-4z" />
-                        </svg>
-                        <span>{isChecking ? 'Verificando...' : 'Refrescar Estado'}</span>
-                    </button>
-                </div>
-                 <div className="space-y-4">
-                    {tables.map(table => (
-                        <div key={table.key} className="bg-brand-border/50 p-4 rounded-md flex justify-between items-center transition-colors">
-                            <div>
-                                <h3 className="font-semibold text-brand-text">{table.name}</h3>
-                                <p className="text-sm text-brand-text-secondary">{table.description}</p>
-                            </div>
-                            {status[table.key] ? (
-                                <div className="flex items-center gap-2 text-green-400 font-bold bg-green-500/20 px-3 py-1 rounded-full text-sm">
-                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
-                                    ONLINE
-                                </div>
+            {/* Backend connection witness y panel de control solo en modo local */}
+            {dbMode === 'local' && (
+                <>
+                    <div className="mb-6 flex flex-col sm:flex-row items-center gap-4">
+                        <div className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold text-sm ${backendStatus === 'online' ? 'bg-green-500/20 text-green-400' : backendStatus === 'checking' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-red-500/20 text-red-400'}`}
+                        >
+                            {backendStatus === 'online' ? (
+                                <>
+                                    <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" fill="green" /></svg>
+                                    Backend ONLINE (puerto {backendPort})
+                                </>
+                            ) : backendStatus === 'checking' ? (
+                                <>
+                                    <svg className="h-5 w-5 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" fill="yellow" /></svg>
+                                    Verificando backend...
+                                </>
                             ) : (
-                                <div className="flex items-center gap-2">
-                                    <span className="text-yellow-400 font-bold bg-yellow-500/20 px-3 py-1 rounded-full text-sm flex items-center gap-2">
-                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
-                                        OFFLINE
-                                    </span>
-                                    <button
-                                        className="ml-2 px-3 py-1 bg-green-500/20 text-green-400 rounded text-sm hover:bg-green-500/30 font-bold"
-                                        disabled={!!loading[table.key]}
-                                        onClick={async () => {
-                                            setLoading(l => ({ ...l, [table.key]: true }));
-                                            addLog(`> Intentando crear la tabla '${table.name}'...`);
-                                            try {
-                                                if (table.key === 'performance_data') {
-                                                    await db.update('performance_data', {});
-                                                } else if (table.key === 'clients') {
-                                                    await db.update('clients', []);
-                                                } else if (table.key === 'users') {
-                                                    await db.update('users', []);
-                                                } else if (table.key === 'looker_data') {
-                                                    await db.update('looker_data', {});
-                                                } else if (table.key === 'bitacora_reports') {
-                                                    await db.update('bitacora_reports', []);
-                                                } else if (table.key === 'uploaded_videos') {
-                                                    await db.update('uploaded_videos', []);
-                                                } else if (table.key === 'import_history') {
-                                                    await db.update('import_history', []);
-                                                } else if (table.key === 'processed_files_hashes') {
-                                                    await db.update('processed_files_hashes', {});
-                                                }
-                                                addLog(`✅ Tabla '${table.name}' creada correctamente.`);
-                                                await checkTableStatus();
-                                            } catch (e) {
-                                                addLog(`❌ Error creando la tabla '${table.name}': ${e instanceof Error ? e.message : String(e)}`);
-                                                alert('Error creando la tabla. Ver log.');
-                                            }
-                                            setLoading(l => ({ ...l, [table.key]: false }));
-                                        }}
-                                    >Crear tabla</button>
-                                </div>
+                                <>
+                                    <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" fill="red" /></svg>
+                                    Backend OFFLINE
+                                </>
                             )}
                         </div>
-                    ))}
-                </div>
-
-                <div className="mt-6">
-                    <h3 className="text-sm font-semibold text-brand-text-secondary mb-2">LOG DE OPERACIONES DE PRODUCCIÓN</h3>
-                    <pre className="bg-brand-bg p-4 rounded-md font-mono text-xs text-brand-text-secondary h-40 overflow-y-auto w-full">
-                        {logs.map((log, i) => (
-                           <p key={i} className={`whitespace-pre-wrap ${log.includes('✅') ? 'text-green-400' : log.includes('⚠️') ? 'text-yellow-400' : log.includes('❌') || log.includes('☢️') ? 'text-red-400' : ''}`}>{log}</p>
-                        ))}
-                    </pre>
-                </div>
-            </div>
-            
-            <div className="border-t-2 border-red-500/30 pt-6 space-y-4">
-                <h3 className="text-xl font-bold text-red-400">Zona de Peligro</h3>
-                 <div className="bg-red-600/10 p-4 rounded-md flex flex-col sm:flex-row justify-between items-center gap-4">
-                    <div>
-                        <h4 className="font-semibold text-red-400">Limpiar Todos los Datos</h4>
-                        <p className="text-sm text-brand-text-secondary mt-1">
-                           Elimina permanentemente todos los clientes, análisis, reportes, usuarios, etc. La aplicación volverá a su estado inicial.
-                        </p>
+                        <div className="flex items-center gap-2">
+                            <label className="text-sm text-brand-text-secondary">Puerto backend:</label>
+                            <input type="number" min="1" max="65535" value={backendPort} onChange={e => {
+                                setBackendPort(e.target.value);
+                                localStorage.setItem('backend_port', e.target.value);
+                            }} className="p-2 rounded bg-brand-bg w-24" />
+                            <button onClick={checkBackend} className="bg-brand-border hover:bg-brand-border/70 text-brand-text font-bold py-2 px-4 rounded-lg shadow-md transition-colors text-sm">Reintentar</button>
+                        </div>
+                        {backendError && <span className="text-red-400 text-xs ml-2">{backendError}</span>}
                     </div>
-                    <button
-                        onClick={handleClearDatabase}
-                        className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg shadow-md transition-colors flex-shrink-0"
-                    >
-                        Limpiar Datos
-                    </button>
-                </div>
-            </div>
+                    {/* Panel de control de la base de datos local */}
+                    <div>
+                        <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4 mb-4">
+                            <div>
+                                <h2 className="text-2xl font-bold text-brand-text mb-2">Panel de Control de la Base de Datos</h2>
+                                <p className="text-brand-text-secondary">
+                                    Gestiona las "tablas" de la base de datos simulada de la aplicación.
+                                </p>
+                            </div>
+                            <button
+                                onClick={checkTableStatus}
+                                disabled={isChecking}
+                                className="bg-brand-border hover:bg-brand-border/70 text-brand-text font-bold py-2 px-4 rounded-lg shadow-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center sm:justify-start gap-2"
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" className={`h-5 w-5 ${isChecking ? 'animate-spin' : ''}`} viewBox="0 0 20 20" fill="currentColor">
+                                    <path d="M7 3a1 1 0 000 2h6a1 1 0 100-2H7zM4 7a1 1 0 011-1h10a1 1 0 110 2H5a1 1 0 01-1-1zM2 11a2 2 0 012-2h12a2 2 0 012 2v4a2 2 0 01-2 2H4a2 2 0 01-2-2v-4z" />
+                                </svg>
+                                <span>{isChecking ? 'Verificando...' : 'Refrescar Estado'}</span>
+                            </button>
+                        </div>
+                        <div className="space-y-4">
+                            {tables.map(table => (
+                                <div key={table.key} className="bg-brand-border/50 p-4 rounded-md flex justify-between items-center transition-colors">
+                                    <div>
+                                        <h3 className="font-semibold text-brand-text">{table.name}</h3>
+                                        <p className="text-sm text-brand-text-secondary">{table.description}</p>
+                                    </div>
+                                    {status[table.key] ? (
+                                        <div className="flex items-center gap-2 text-green-400 font-bold bg-green-500/20 px-3 py-1 rounded-full text-sm">
+                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
+                                            ONLINE
+                                        </div>
+                                    ) : (
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-yellow-400 font-bold bg-yellow-500/20 px-3 py-1 rounded-full text-sm flex items-center gap-2">
+                                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                                                OFFLINE
+                                            </span>
+                                            <button
+                                                className="ml-2 px-3 py-1 bg-green-500/20 text-green-400 rounded text-sm hover:bg-green-500/30 font-bold"
+                                                disabled={!!loading[table.key]}
+                                                onClick={async () => {
+                                                    setLoading(l => ({ ...l, [table.key]: true }));
+                                                    addLog(`> Intentando crear la tabla '${table.name}'...`);
+                                                    try {
+                                                        if (table.key === 'performance_data') {
+                                                            await db.update('performance_data', {});
+                                                        } else if (table.key === 'clients') {
+                                                            await db.update('clients', []);
+                                                        } else if (table.key === 'users') {
+                                                            await db.update('users', []);
+                                                        } else if (table.key === 'looker_data') {
+                                                            await db.update('looker_data', {});
+                                                        } else if (table.key === 'bitacora_reports') {
+                                                            await db.update('bitacora_reports', []);
+                                                        } else if (table.key === 'uploaded_videos') {
+                                                            await db.update('uploaded_videos', []);
+                                                        } else if (table.key === 'import_history') {
+                                                            await db.update('import_history', []);
+                                                        } else if (table.key === 'processed_files_hashes') {
+                                                            await db.update('processed_files_hashes', {});
+                                                        }
+                                                        addLog(`✅ Tabla '${table.name}' creada correctamente.`);
+                                                        await checkTableStatus();
+                                                    } catch (e) {
+                                                        addLog(`❌ Error creando la tabla '${table.name}': ${e instanceof Error ? e.message : String(e)}`);
+                                                        alert('Error creando la tabla. Ver log.');
+                                                    }
+                                                    setLoading(l => ({ ...l, [table.key]: false }));
+                                                }}
+                                            >Crear tabla</button>
+                                        </div>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+                        <div className="mt-6">
+                            <h3 className="text-sm font-semibold text-brand-text-secondary mb-2">LOG DE OPERACIONES DE PRODUCCIÓN</h3>
+                            <pre className="bg-brand-bg p-4 rounded-md font-mono text-xs text-brand-text-secondary h-40 overflow-y-auto w-full">
+                                {logs.map((log, i) => (
+                                   <p key={i} className={`whitespace-pre-wrap ${log.includes('✅') ? 'text-green-400' : log.includes('⚠️') ? 'text-yellow-400' : log.includes('❌') || log.includes('☢️') ? 'text-red-400' : ''}`}>{log}</p>
+                                ))}
+                            </pre>
+                        </div>
+                    </div>
+                    {/* Zona de peligro local */}
+                    <div className="border-t-2 border-red-500/30 pt-6 space-y-4">
+                        <h3 className="text-xl font-bold text-red-400">Zona de Peligro</h3>
+                        <div className="bg-red-600/10 p-4 rounded-md flex flex-col sm:flex-row justify-between items-center gap-4">
+                            <div>
+                                <h4 className="font-semibold text-red-400">Limpiar Todos los Datos</h4>
+                                <p className="text-sm text-brand-text-secondary mt-1">
+                                    Elimina permanentemente todos los clientes, análisis, reportes, usuarios, etc. La aplicación volverá a su estado inicial.
+                                </p>
+                            </div>
+                            <button
+                                onClick={handleClearDatabase}
+                                className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg shadow-md transition-colors flex-shrink-0"
+                            >
+                                Limpiar Datos
+                            </button>
+                        </div>
+                    </div>
+                </>
+            )}
+            {dbMode === 'sql' && (
+                <SqlConnectionPanel />
+            )}
         </div>
     );
 };

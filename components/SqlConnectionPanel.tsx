@@ -1,6 +1,26 @@
 import React, { useEffect, useState } from 'react';
 
 export const SqlConnectionPanel: React.FC = () => {
+    const [tables, setTables] = useState<string[]>([]);
+    const [tablesLoading, setTablesLoading] = useState(false);
+
+    const fetchTables = async () => {
+        setTablesLoading(true);
+        setMessage('');
+        try {
+            const data = await fetchJson('/api/sql/tables');
+            if (Array.isArray(data.tables)) {
+                setTables(data.tables);
+                setMessage('Tablas obtenidas correctamente');
+            } else {
+                setMessage(data.error || 'Error al obtener tablas');
+            }
+        } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            setMessage(msg === 'Failed to fetch' ? 'No se pudo conectar con el backend' : msg);
+        }
+        setTablesLoading(false);
+    };
     const [server, setServer] = useState('192.168.1.234');
     const [port, setPort] = useState('1433');
     const [database, setDatabase] = useState('MiAppDB');
@@ -143,6 +163,26 @@ export const SqlConnectionPanel: React.FC = () => {
                     Probar Permisos
                 </button>
             </div>
+            {/* Botón y listado de tablas SQL debajo del panel de conexión */}
+            <div className="mb-4">
+                <button
+                    onClick={fetchTables}
+                    disabled={!connected || tablesLoading}
+                    className="bg-brand-border hover:bg-brand-border/70 text-brand-text font-bold py-2 px-4 rounded-lg shadow-md transition-colors disabled:opacity-50"
+                >
+                    {tablesLoading ? 'Consultando tablas...' : 'Refrescar Estado de Tablas SQL'}
+                </button>
+            </div>
+            {tables.length > 0 && (
+                <div className="mb-4">
+                    <h4 className="text-lg font-semibold text-brand-text mb-2">Tablas en la base de datos:</h4>
+                    <ul className="list-disc pl-6">
+                        {tables.map((table, idx) => (
+                            <li key={idx} className="text-brand-text-secondary">{table}</li>
+                        ))}
+                    </ul>
+                </div>
+            )}
             {message && <p className="text-sm text-brand-text-secondary mb-2">{message}</p>}
             {permissions && (
                 <div className="text-sm text-brand-text-secondary">
