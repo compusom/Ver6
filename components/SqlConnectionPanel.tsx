@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import Logger from '../Logger';
 
 export const SqlConnectionPanel: React.FC = () => {
     const [tables, setTables] = useState<string[]>([]);
@@ -168,25 +169,30 @@ export const SqlConnectionPanel: React.FC = () => {
     };
 
     // --- Table management actions ---
-    const handleInitTables = async () => {
+    const handleEnsureSchema = async () => {
         setTableOpsLoading(true);
         setMessage('');
+        Logger.info('[SQL][EnsureSchema] start');
         try {
-            const data = await fetchJson('/api/sql/init-tables', { method: 'POST' });
-            if (data.created && data.created.length) {
-                setMessage(`Tablas creadas: ${data.created.join(', ')}`);
+            const data = await fetchJson('/api/sql/ensure-schema', { method: 'POST' });
+            if (data.actions) {
+                const summary = data.actions.map((a: any) => `${a.table}:${a.action}`).join(', ');
+                setMessage(summary || 'Esquema verificado');
+            } else if (data.error) {
+                setMessage(data.error);
             } else {
-                setMessage('Todas las tablas ya existían');
+                setMessage('Error al asegurar esquema');
             }
             await fetchTables();
         } catch (error) {
             const msg = error instanceof Error ? error.message : String(error);
             if (msg.includes('Cannot POST') || msg.includes('Cannot GET')) {
-                setMessage('El backend no responde correctamente al endpoint de inicialización de tablas');
+                setMessage('El backend no responde correctamente al endpoint de asegurar esquema');
             } else {
                 setMessage(msg === 'Failed to fetch' ? 'No se pudo conectar con el backend' : msg);
             }
         }
+        Logger.info('[SQL][EnsureSchema] end');
         setTableOpsLoading(false);
     };
 
@@ -217,6 +223,43 @@ export const SqlConnectionPanel: React.FC = () => {
             setMessage(msg === 'Failed to fetch' ? 'No se pudo conectar con el backend' : msg);
         }
         setTableOpsLoading(false);
+    };
+
+    // --- Diagnostics ---
+    const [diagnostics, setDiagnostics] = useState<any | null>(null);
+    const [diagLoading, setDiagLoading] = useState(false);
+    const runDiagnostics = async () => {
+        setDiagLoading(true);
+        setMessage('');
+        Logger.info('[SQL][Diagnostics] start');
+        try {
+            const data = await fetchJson('/api/sql/diagnostics');
+            setDiagnostics(data);
+            Logger.info('[SQL][Diagnostics] end');
+        } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            setMessage(msg === 'Failed to fetch' ? 'No se pudo conectar con el backend' : msg);
+            Logger.error('[SQL][Diagnostics] error', msg);
+        }
+        setDiagLoading(false);
+    };
+
+    const optionalIndexes = ['IX_ads_client_adname'];
+    const hasIssues = diagnostics && diagnostics.schemaChecks && diagnostics.schemaChecks.some((sc: any) => {
+        const cols = Object.values(sc.columns || {}).some((v: boolean) => !v);
+        const idx = Object.entries(sc.indexes || {}).some(([name, v]) => !v && !optionalIndexes.includes(name));
+        const fk = sc.fk && !String(sc.fk).includes(':ok');
+        return !sc.exists || cols || idx || fk;
+    });
+
+    const renderStatus = (ok: boolean, optional = false) => {
+        if (ok) return '✅';
+        return optional ? '⚠️' : '❌';
+    };
+
+    const fixNow = async () => {
+        await handleEnsureSchema();
+        await runDiagnostics();
     };
 
     return (
@@ -292,11 +335,11 @@ export const SqlConnectionPanel: React.FC = () => {
                 </button>
                 <div className="flex flex-wrap gap-2">
                     <button
-                        onClick={handleInitTables}
+                        onClick={handleEnsureSchema}
                         disabled={!connected || tableOpsLoading}
                         className="bg-brand-border hover:bg-brand-border/70 text-brand-text font-bold py-2 px-4 rounded-lg shadow-md transition-colors disabled:opacity-50"
                     >
-                        {tableOpsLoading ? 'Procesando...' : 'Crear/Verificar Tablas'}
+                        {tableOpsLoading ? 'Procesando...' : 'Crear/Verificar Tablas (SQL)'}
                     </button>
                     <button
                         onClick={handleClearTables}
@@ -324,6 +367,59 @@ export const SqlConnectionPanel: React.FC = () => {
                     </ul>
                 </div>
             )}
+            {/* Diagnóstico de datos */}
+            <div className="mb-4">
+                <button
+                    onClick={runDiagnostics}
+                    disabled={!connected || diagLoading}
+                    className="bg-brand-border hover:bg-brand-border/70 text-brand-text font-bold py-2 px-4 rounded-lg shadow-md transition-colors disabled:opacity-50"
+                >
+                    {diagLoading ? 'Procesando...' : 'Ejecutar diagnóstico'}
+                </button>
+                {diagnostics && (
+                    <div className="mt-4 space-y-3">
+                        {diagnostics.schemaChecks?.map((sc: any) => (
+                            <div key={sc.table} className="border border-brand-border rounded p-2">
+                                <div className="font-semibold">
+                                    {sc.table}: {renderStatus(sc.exists)}
+                                </div>
+                                {Object.entries(sc.columns || {}).map(([col, ok]) => (
+                                    <div key={col} className="ml-4 text-sm">
+                                        {col}: {renderStatus(ok as boolean)}
+                                    </div>
+                                ))}
+                                {Object.entries(sc.indexes || {}).map(([idx, ok]) => (
+                                    <div key={idx} className="ml-4 text-sm">
+                                        {idx}: {renderStatus(ok as boolean, optionalIndexes.includes(idx))}
+                                    </div>
+                                ))}
+                                {sc.fk && (
+                                    <div className="ml-4 text-sm">
+                                        {sc.fk}: {renderStatus(String(sc.fk).includes(':ok'))}
+                                    </div>
+                                )}
+                            </div>
+                        ))}
+                        <div className="text-sm">
+                            <p>clients: {diagnostics.stats?.clients?.count ?? 0}</p>
+                            {diagnostics.stats?.facts_meta && (
+                                <p>
+                                    facts_meta: {diagnostics.stats.facts_meta.count} ({diagnostics.stats.facts_meta.minDate} - {diagnostics.stats.facts_meta.maxDate})
+                                </p>
+                            )}
+                            <p>ads: {diagnostics.stats?.ads?.count ?? 0}</p>
+                        </div>
+                        {hasIssues && (
+                            <button
+                                onClick={fixNow}
+                                className="bg-brand-border hover:bg-brand-border/70 text-brand-text font-bold py-2 px-4 rounded-lg shadow-md transition-colors"
+                            >
+                                Arreglar ahora
+                            </button>
+                        )}
+                    </div>
+                )}
+            </div>
             {message && <p className="text-sm text-brand-text-secondary mb-2">{message}</p>}
             {permissions && (
                 <div className="text-sm text-brand-text-secondary">
