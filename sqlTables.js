@@ -23,6 +23,21 @@ export const TABLES = {
     `,
     dependencies: ['clients']
   },
+  ads: {
+    create: `
+        CREATE TABLE ads (
+            client_id INT NOT NULL,
+            ad_id NVARCHAR(255) NOT NULL,
+            ad_name_norm NVARCHAR(255) NOT NULL,
+            name NVARCHAR(255),
+            ad_preview_link NVARCHAR(MAX),
+            ad_creative_thumbnail_url NVARCHAR(MAX),
+            PRIMARY KEY (client_id, ad_id),
+            UNIQUE (client_id, ad_name_norm)
+        )
+    `,
+    dependencies: ['clients']
+  },
   clientes: {
     create: `
         CREATE TABLE clientes (
