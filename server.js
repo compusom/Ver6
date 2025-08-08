@@ -545,12 +545,15 @@ SELECT client_id FROM @out;`);
             const d = parseDateForSort(r['date'] || r['day'] || r['día']);
             if (!d) continue;
             const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())).toISOString().split('T')[0];
+            const adId = r['ad_id'] ? String(r['ad_id']).trim() : '';
+            const campaignId = r['campaign_id'] || r['campaign id'] || '';
+            const adsetId = r['adset_id'] || r['adset id'] || '';
             facts.push({
                 client_id: clientId,
                 date,
-                ad_id: r['ad_id'] || null,
-                campaign_id: r['campaign_id'] || r['campaign id'] || null,
-                adset_id: r['adset_id'] || r['adset id'] || null,
+                ad_id: adId === '' ? null : adId,
+                campaign_id: campaignId === '' ? null : campaignId,
+                adset_id: adsetId === '' ? null : adsetId,
                 impressions: r['impressions'] ?? null,
                 clicks: r['clicks'] ?? null,
                 spend: parseNumber(r['spend'] ?? r['amount_spent (eur)'] ?? null),
@@ -558,62 +561,118 @@ SELECT client_id FROM @out;`);
                 roas: r['roas'] ?? null,
             });
         }
-        const table = new sql.Table('#in_facts');
-        table.create = true;
-        table.columns.add('client_id', sql.UniqueIdentifier, { nullable: false });
-        table.columns.add('date', sql.Date, { nullable: false });
-        table.columns.add('ad_id', sql.NVarChar(100), { nullable: true });
-        table.columns.add('campaign_id', sql.NVarChar(100), { nullable: true });
-        table.columns.add('adset_id', sql.NVarChar(100), { nullable: true });
-        table.columns.add('impressions', sql.BigInt, { nullable: true });
-        table.columns.add('clicks', sql.BigInt, { nullable: true });
-        table.columns.add('spend', sql.Decimal(18,4), { nullable: true });
-        table.columns.add('purchases', sql.Int, { nullable: true });
-        table.columns.add('roas', sql.Decimal(18,4), { nullable: true });
-        for (const f of facts) {
-            table.rows.add(f.client_id, f.date, f.ad_id ?? null, f.campaign_id ?? null, f.adset_id ?? null, f.impressions ?? null, f.clicks ?? null, f.spend ?? null, f.purchases ?? null, f.roas ?? null);
-        }
+
         const transaction = new sql.Transaction(sqlPool);
         await transaction.begin();
         try {
-            const reqBulk = new sql.Request(transaction);
-            await reqBulk.bulk(table);
-            const mergeRes = await reqBulk.query(`IF OBJECT_ID('tempdb..#actions') IS NOT NULL DROP TABLE #actions;
-CREATE TABLE #actions(action NVARCHAR(10));
-MERGE dbo.facts_meta AS T
-USING #in_facts AS S
-ON (T.client_id = S.client_id AND T.[date] = S.[date] AND ISNULL(T.ad_id,'') = ISNULL(S.ad_id,''))
-WHEN MATCHED THEN
-  UPDATE SET
-    campaign_id = S.campaign_id,
-    adset_id    = S.adset_id,
-    impressions = S.impressions,
-    clicks      = S.clicks,
-    spend       = S.spend,
-    purchases   = S.purchases,
-    roas        = S.roas
-WHEN NOT MATCHED THEN
-  INSERT (client_id,[date],ad_id,campaign_id,adset_id,impressions,clicks,spend,purchases,roas)
-  VALUES (S.client_id,S.[date],S.ad_id,S.campaign_id,S.adset_id,S.impressions,S.clicks,S.spend,S.purchases,S.roas)
-OUTPUT $action INTO #actions;
+            const req = new sql.Request(transaction);
+            await req.query(`CREATE TABLE #in_facts(
+  client_id UNIQUEIDENTIFIER NOT NULL,
+  [date] DATE NOT NULL,
+  ad_id NVARCHAR(100) NULL,
+  campaign_id NVARCHAR(100) NULL,
+  adset_id NVARCHAR(100) NULL,
+  impressions BIGINT NULL,
+  clicks BIGINT NULL,
+  spend DECIMAL(18,4) NULL,
+  purchases INT NULL,
+  roas DECIMAL(18,4) NULL
+);`);
 
-SELECT
-  SUM(CASE WHEN action='INSERT' THEN 1 ELSE 0 END) AS inserted,
-  SUM(CASE WHEN action='UPDATE' THEN 1 ELSE 0 END) AS updated
-FROM #actions;`);
+            const table = new sql.Table('#in_facts');
+            table.create = false;
+            table.columns.add('client_id', sql.UniqueIdentifier, { nullable: false });
+            table.columns.add('date', sql.Date, { nullable: false });
+            table.columns.add('ad_id', sql.NVarChar(100), { nullable: true });
+            table.columns.add('campaign_id', sql.NVarChar(100), { nullable: true });
+            table.columns.add('adset_id', sql.NVarChar(100), { nullable: true });
+            table.columns.add('impressions', sql.BigInt, { nullable: true });
+            table.columns.add('clicks', sql.BigInt, { nullable: true });
+            table.columns.add('spend', sql.Decimal(18,4), { nullable: true });
+            table.columns.add('purchases', sql.Int, { nullable: true });
+            table.columns.add('roas', sql.Decimal(18,4), { nullable: true });
+            for (const f of facts) {
+                table.rows.add(
+                    f.client_id,
+                    f.date,
+                    f.ad_id,
+                    f.campaign_id,
+                    f.adset_id,
+                    f.impressions,
+                    f.clicks,
+                    f.spend,
+                    f.purchases,
+                    f.roas
+                );
+            }
+            await req.bulk(table);
+
+            const mergeRes = await req.query(`SET XACT_ABORT ON;
+BEGIN TRY
+  BEGIN TRAN;
+  ;WITH D AS (
+    SELECT client_id, [date], ad_id, campaign_id, adset_id,
+           SUM(impressions) impressions, SUM(clicks) clicks,
+           SUM(spend) spend, SUM(purchases) purchases, AVG(roas) roas
+    FROM #in_facts
+    GROUP BY client_id, [date], ad_id, campaign_id, adset_id
+  ),
+  A AS (
+    MERGE dbo.facts_meta AS T
+    USING D AS S
+    ON (T.client_id = S.client_id AND T.[date] = S.[date] AND ISNULL(T.ad_id,'') = ISNULL(S.ad_id,''))
+    WHEN MATCHED THEN
+      UPDATE SET
+        campaign_id = S.campaign_id,
+        adset_id    = S.adset_id,
+        impressions = S.impressions,
+        clicks      = S.clicks,
+        spend       = S.spend,
+        purchases   = S.purchases,
+        roas        = S.roas
+    WHEN NOT MATCHED THEN
+      INSERT (client_id,[date],ad_id,campaign_id,adset_id,impressions,clicks,spend,purchases,roas)
+      VALUES (S.client_id,S.[date],S.ad_id,S.campaign_id,S.adset_id,S.impressions,S.clicks,S.spend,S.purchases,S.roas)
+    OUTPUT $action AS action
+  )
+  SELECT
+    SUM(CASE WHEN action='INSERT' THEN 1 ELSE 0 END) AS inserted,
+    SUM(CASE WHEN action='UPDATE' THEN 1 ELSE 0 END) AS updated,
+    COUNT(*) AS total
+  FROM A;
+  COMMIT;
+END TRY
+BEGIN CATCH
+  DECLARE @n INT = ERROR_NUMBER(), @s INT = ERROR_STATE(), @m NVARCHAR(4000)=ERROR_MESSAGE(), @p NVARCHAR(128)=ERROR_PROCEDURE(), @l INT=ERROR_LINE();
+  IF @@TRANCOUNT>0 ROLLBACK;
+  SELECT @n AS error_number, @s AS error_state, @m AS error_message, @p AS error_proc, @l AS error_line;
+END CATCH`);
+
+            const resRow = mergeRes.recordset[0];
+            if (resRow && resRow.error_number) {
+                await transaction.rollback();
+                logger.error('[SQL] Import merge error:', resRow);
+                return res.status(500).json({ success: false, error: resRow });
+            }
+
             await transaction.commit();
-            const inserted = mergeRes.recordset[0].inserted || 0;
-            const updated = mergeRes.recordset[0].updated || 0;
-            const total = inserted + updated;
+
+            const inserted = resRow.inserted || 0;
+            const updated = resRow.updated || 0;
+            const total = resRow.total || 0;
             logger.info(`[SQL] Import summary account="${accountName}" norm="${nameNorm}" inserted=${inserted} updated=${updated} total=${total}`);
+
             await sqlPool
                 .request()
+                .input('source', sql.NVarChar(50), 'sql')
                 .input('batch_data', sql.NVarChar(sql.MAX), JSON.stringify({ id: crypto.randomUUID(), timestamp: new Date().toISOString(), source: 'sql', fileName: req.file.originalname, accountName, nameNorm, summary: { inserted, updated, total } }))
-                .query('INSERT INTO import_history (batch_data) VALUES (@batch_data)');
+                .query('INSERT INTO import_history (source, batch_data) VALUES (@source, @batch_data)');
+
             res.json({ inserted, updated, total });
         } catch (err) {
             await transaction.rollback();
-            throw err;
+            logger.error('[SQL] Error importing Excel:', err);
+            res.status(500).json({ success: false, error: err.message });
         }
     } catch (error) {
         logger.error('[SQL] Error importing Excel:', error);
@@ -692,28 +751,38 @@ IF @clients_client_id_type IS NOT NULL AND @clients_client_id_type <> 'uniqueide
 BEGIN
   IF COL_LENGTH('dbo.clients','client_id_uid') IS NULL
     ALTER TABLE dbo.clients ADD client_id_uid UNIQUEIDENTIFIER NULL;
-  UPDATE dbo.clients SET client_id_uid = ISNULL(client_id_uid, NEWID());
+
+  IF COL_LENGTH('dbo.clients','client_id_uid') IS NOT NULL
+    UPDATE dbo.clients SET client_id_uid = ISNULL(client_id_uid, NEWID());
+
   DECLARE @pk_clients sysname;
   SELECT @pk_clients = kc.name
   FROM sys.key_constraints kc
   WHERE kc.parent_object_id = OBJECT_ID('dbo.clients') AND kc.type='PK';
   IF @pk_clients IS NOT NULL
   BEGIN
-    DECLARE @sql NVARCHAR(MAX) = N'ALTER TABLE dbo.clients DROP CONSTRAINT ['+@pk_clients+N']';
-    EXEC sp_executesql @sql;
+    DECLARE @sql_drop_pk_clients NVARCHAR(MAX) = N'ALTER TABLE dbo.clients DROP CONSTRAINT ['+@pk_clients+N']';
+    EXEC sp_executesql @sql_drop_pk_clients;
   END
-  ALTER TABLE dbo.clients ADD CONSTRAINT PK_clients PRIMARY KEY (client_id_uid);
-  EXEC sp_rename 'dbo.clients.client_id', 'client_id_int', 'COLUMN';
-  EXEC sp_rename 'dbo.clients.client_id_uid', 'client_id', 'COLUMN';
+
+  IF COL_LENGTH('dbo.clients','client_id_uid') IS NOT NULL
+    ALTER TABLE dbo.clients ADD CONSTRAINT PK_clients PRIMARY KEY (client_id_uid);
+
+  IF COL_LENGTH('dbo.clients','client_id') IS NOT NULL
+    EXEC sp_rename 'dbo.clients.client_id', 'client_id_int', 'COLUMN';
+  IF COL_LENGTH('dbo.clients','client_id_uid') IS NOT NULL
+    EXEC sp_rename 'dbo.clients.client_id_uid', 'client_id', 'COLUMN';
+
   INSERT INTO @actions VALUES('migrate-type','clients.client_id int -> uniqueidentifier','ok',NULL);
-  IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='UQ_clients_name_norm' AND object_id=OBJECT_ID('dbo.clients'))
-    CREATE UNIQUE INDEX UQ_clients_name_norm ON dbo.clients(name_norm);
-END
-ELSE
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='UQ_clients_name_norm' AND object_id=OBJECT_ID('dbo.clients'))
-    CREATE UNIQUE INDEX UQ_clients_name_norm ON dbo.clients(name_norm);
 END;
+
+SELECT @clients_client_id_type = TY.name
+FROM sys.columns C
+JOIN sys.types TY ON TY.user_type_id = C.user_type_id
+WHERE C.object_id = OBJECT_ID('dbo.clients') AND C.name = 'client_id';
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='UQ_clients_name_norm' AND object_id=OBJECT_ID('dbo.clients'))
+  CREATE UNIQUE INDEX UQ_clients_name_norm ON dbo.clients(name_norm);
 
 IF OBJECT_ID('dbo.facts_meta','U') IS NULL
 BEGIN
@@ -784,12 +853,20 @@ BEGIN
 
   DECLARE @unassigned UNIQUEIDENTIFIER = (SELECT TOP (1) client_id FROM dbo.clients WHERE name_norm = N'unassigned');
 
-  UPDATE dbo.facts_meta SET client_id_uid = ISNULL(client_id_uid, @unassigned);
+  IF COL_LENGTH('dbo.facts_meta','client_id_uid') IS NOT NULL
+    UPDATE dbo.facts_meta SET client_id_uid = ISNULL(client_id_uid, @unassigned);
 
-  ALTER TABLE dbo.facts_meta DROP COLUMN client_id;
-  EXEC sp_rename 'dbo.facts_meta.client_id_uid', 'client_id', 'COLUMN';
+  IF COL_LENGTH('dbo.facts_meta','client_id') IS NOT NULL
+    ALTER TABLE dbo.facts_meta DROP COLUMN client_id;
+  IF COL_LENGTH('dbo.facts_meta','client_id_uid') IS NOT NULL
+    EXEC sp_rename 'dbo.facts_meta.client_id_uid', 'client_id', 'COLUMN';
 
   INSERT INTO @actions VALUES('migrate-type','facts_meta.client_id int -> uniqueidentifier (placeholder)','ok',@@ROWCOUNT);
+
+  SELECT @facts_client_id_type = TY.name
+  FROM sys.columns C
+  JOIN sys.types TY ON TY.user_type_id = C.user_type_id
+  WHERE C.object_id = OBJECT_ID('dbo.facts_meta') AND C.name = 'client_id';
 END
 ELSE
 BEGIN
@@ -801,6 +878,11 @@ BEGIN
     UPDATE dbo.facts_meta SET client_id = @unassigned2 WHERE client_id IS NULL;
     INSERT INTO @actions VALUES('backfill-null','facts_meta.client_id -> Unassigned','ok',@@ROWCOUNT);
   END
+
+  SELECT @facts_client_id_type = TY.name
+  FROM sys.columns C
+  JOIN sys.types TY ON TY.user_type_id = C.user_type_id
+  WHERE C.object_id = OBJECT_ID('dbo.facts_meta') AND C.name = 'client_id';
 END;
 
 BEGIN TRY
@@ -832,6 +914,48 @@ BEGIN
   CREATE UNIQUE INDEX [UX_facts_meta_client_date_ad_nz]
   ON dbo.facts_meta(client_id, [date], ad_id_nz);
   INSERT INTO @actions VALUES('create-unique-index','UX_facts_meta_client_date_ad_nz','ok',NULL);
+END;
+
+-- import_history with batch_data
+IF OBJECT_ID('dbo.import_history','U') IS NULL
+BEGIN
+  CREATE TABLE dbo.import_history(
+    id BIGINT IDENTITY(1,1) PRIMARY KEY,
+    source NVARCHAR(50) NOT NULL,
+    batch_data NVARCHAR(MAX) NULL,
+    created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+  );
+  INSERT INTO @actions VALUES('create-table','import_history','ok',NULL);
+END
+ELSE
+BEGIN
+  IF COL_LENGTH('dbo.import_history','batch_data') IS NULL
+  BEGIN
+    IF COL_LENGTH('dbo.import_history','payload') IS NOT NULL
+      EXEC sp_rename 'dbo.import_history.payload','batch_data','COLUMN';
+    ELSE
+      ALTER TABLE dbo.import_history ADD batch_data NVARCHAR(MAX) NULL;
+    INSERT INTO @actions VALUES('alter-table','import_history.add_batch_data','ok',NULL);
+  END
+END;
+
+-- processed_files_hashes
+IF OBJECT_ID('dbo.processed_files_hashes','U') IS NULL
+BEGIN
+  CREATE TABLE dbo.processed_files_hashes(
+    id BIGINT IDENTITY(1,1) PRIMARY KEY,
+    file_hash NVARCHAR(128) NOT NULL,
+    created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+  );
+  INSERT INTO @actions VALUES('create-table','processed_files_hashes','ok',NULL);
+END
+ELSE
+BEGIN
+  IF COL_LENGTH('dbo.processed_files_hashes','file_hash') IS NULL
+  BEGIN
+    ALTER TABLE dbo.processed_files_hashes ADD file_hash NVARCHAR(128) NOT NULL;
+    INSERT INTO @actions VALUES('alter-table','processed_files_hashes.add_file_hash','ok',NULL);
+  END
 END;
 
 SELECT step, detail, status, rows FROM @actions;
@@ -867,35 +991,6 @@ SELECT step, detail, status, rows FROM @actions;
             actions.push({ step: 'create-index', detail: 'IX_ads_client_adname on ads', status: 'ok' });
         } else {
             actions.push({ step: 'create-index', detail: 'IX_ads_client_adname on ads', status: 'exists' });
-        }
-
-        // 4) Auxiliary tables
-        result = await sqlPool
-            .request()
-            .query("SELECT 1 FROM sys.tables WHERE name='import_history'");
-        if (result.recordset.length === 0) {
-            await sqlPool.request().query(`CREATE TABLE dbo.import_history(
-    id BIGINT IDENTITY(1,1) PRIMARY KEY,
-    source NVARCHAR(50) NOT NULL,
-    payload NVARCHAR(MAX) NULL,
-    created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
-);`);
-            actions.push({ step: 'create-table', detail: 'import_history', status: 'ok' });
-        } else {
-            actions.push({ step: 'create-table', detail: 'import_history', status: 'exists' });
-        }
-        result = await sqlPool
-            .request()
-            .query("SELECT 1 FROM sys.tables WHERE name='processed_files_hashes'");
-        if (result.recordset.length === 0) {
-            await sqlPool.request().query(`CREATE TABLE dbo.processed_files_hashes(
-    id BIGINT IDENTITY(1,1) PRIMARY KEY,
-    file_hash NVARCHAR(128) NOT NULL,
-    created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
-);`);
-            actions.push({ step: 'create-table', detail: 'processed_files_hashes', status: 'ok' });
-        } else {
-            actions.push({ step: 'create-table', detail: 'processed_files_hashes', status: 'exists' });
         }
 
         logger.info('[SQL][EnsureSchema] end');
