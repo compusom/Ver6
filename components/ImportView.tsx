@@ -493,6 +493,9 @@ export const ImportView: React.FC<ImportViewProps> = ({
             updatedHashes[clientId] = [...(updatedHashes[clientId] || []), fileHash];
             await db.saveProcessedHashes(updatedHashes);
 
+            await refreshClients();
+            await refreshPerformance();
+
         } catch (error) {
             const message = error instanceof Error ? error.message : "Error desconocido.";
             setFeedback({ type: 'error', message: `Error al procesar el reporte TXT: ${message}` });
