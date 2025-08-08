@@ -492,7 +492,14 @@ app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
         const fileBuffer = fs.readFileSync(req.file.path);
         const workbook = xlsx.read(fileBuffer, { type: 'buffer' });
         const sheet = workbook.Sheets[workbook.SheetNames[0]];
-        const rows = xlsx.utils.sheet_to_json(sheet, { defval: null });
+
+        // Detect and skip title rows like "Raw Data Report"
+        let startRow = 0;
+        const firstCell = sheet['A1']?.v;
+        if (typeof firstCell === 'string' && firstCell.toLowerCase().includes('raw data report')) {
+            startRow = 1;
+        }
+        const rows = xlsx.utils.sheet_to_json(sheet, { defval: null, range: startRow });
 
         if (rows.length === 0) {
             return res.status(400).json({ success: false, error: 'Excel file is empty' });
@@ -705,7 +712,7 @@ app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
 
         res.json({ success: true, inserted, updated, skipped, clientName, periodStart, periodEnd });
     } catch (error) {
-        logger.error('[SQL] Error importing Excel:', error.message);
+        logger.error('[SQL] Error importing Excel:', error.stack || error.message);
         res.status(500).json({ success: false, error: error.message });
     } finally {
         fs.unlink(req.file.path, () => {});
