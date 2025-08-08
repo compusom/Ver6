@@ -5,12 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "tsc lib/parseDateForSort.ts --outDir lib --noEmit false --module esnext --target ES2022 --moduleResolution node && vite build",
     "preview": "vite preview",
     "server": "node server.js",
     "start": "node ./scripts/free-ports.cjs && concurrently \"npm run server\" \"npm run dev\"",
     "dev:full": "concurrently \"npm run server\" \"npm run dev\"",
-        "test": "vitest run"
+    "test": "vitest run"
   },
   "dependencies": {
     "@google/genai": "^1.11.0",

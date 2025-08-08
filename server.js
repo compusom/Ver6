@@ -24,7 +24,7 @@ import xlsx from 'xlsx';
 import crypto from 'crypto';
 import logger from './serverLogger.js';
 import { SQL_TABLE_DEFINITIONS, getCreationOrder, getDeletionOrder } from './sqlTables.js';
-import { parseDateForSort } from './lib/parseDateForSort.ts';
+import { parseDateForSort } from './lib/parseDateForSort.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
