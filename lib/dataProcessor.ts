@@ -1,6 +1,6 @@
 import { read, utils, WorkBook, WorkSheet } from 'xlsx';
 import { Client, PerformanceRecord, AllLookerData, ClientLookerData } from '../types';
-import { parseDateForSort } from './parseDateForSort';
+import { parseDateForSort } from './parseDateForSort.ts';
 
 // --- UTILITY FUNCTIONS ---
 const normalizeHeader = (header: string): string => {
