@@ -125,15 +125,17 @@ export const ImportView: React.FC<ImportViewProps> = ({
         }
     };
 
-    // Nueva función para importar a SQL con logs paso a paso
-    const importExcelToSQL = async (file: File) => {
+    const [pendingSqlClient, setPendingSqlClient] = useState<{ accountName: string; nameNorm: string; file: File } | null>(null);
+
+    const importExcelToSQL = async (file: File, confirmCreate = false) => {
         setImportLogs([]);
         addLog(`Archivo seleccionado: ${file.name}`);
         setIsProcessing(true);
         setFeedback({ type: 'info', message: 'Verificando conexión y enviando archivo a SQL Server...' });
         try {
             const backendPort = localStorage.getItem('backend_port') || '3001';
-            const importUrl = `http://localhost:${backendPort}/api/sql/import-excel?allowCreateClient=true`;
+            let importUrl = `http://localhost:${backendPort}/api/sql/import-excel`;
+            if (confirmCreate) importUrl += '?confirmCreate=1';
             addLog(`Conectando a ${importUrl}`);
             await ensureSqlConnected();
             addLog('Conexión SQL verificada');
@@ -145,6 +147,16 @@ export const ImportView: React.FC<ImportViewProps> = ({
                 body: formData,
             });
             addLog('Esperando respuesta del servidor...');
+            if (response.status === 409) {
+                const result = await response.json();
+                if (result?.needsConfirmation) {
+                    setPendingSqlClient({ accountName: result.accountName, nameNorm: result.nameNorm, file });
+                    setFeedback({ type: 'info', message: `El cliente '${result.accountName}' no existe en SQL. ¿Crear ahora?` });
+                    addLog(`Se requiere confirmación para crear el cliente: ${result.accountName} (${result.nameNorm})`);
+                    setIsProcessing(false);
+                    return;
+                }
+            }
             const result = await response.json().catch(() => ({}));
             if (!response.ok || result?.success === false) {
                 throw new Error(result?.error || 'Error al importar a SQL Server.');
@@ -161,6 +173,37 @@ export const ImportView: React.FC<ImportViewProps> = ({
         } finally {
             setIsProcessing(false);
         }
+    };
+
+    const ConfirmSqlClientModal = () => {
+        if (!pendingSqlClient) return null;
+        return (
+            <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+                <div className="bg-white rounded-lg p-8 shadow-lg max-w-md w-full">
+                    <h2 className="text-lg font-bold mb-4">Confirmar creación de cliente</h2>
+                    <p>El cliente <b>{pendingSqlClient.accountName}</b> no existe en SQL.<br />¿Deseas crearlo y continuar con la importación?</p>
+                    <div className="mt-6 flex gap-4 justify-end">
+                        <button
+                            className="bg-brand-primary text-white px-4 py-2 rounded-lg font-bold"
+                            onClick={async () => {
+                                setPendingSqlClient(null);
+                                setIsProcessing(true);
+                                setFeedback({ type: 'info', message: 'Creando cliente y reintentando importación...' });
+                                await importExcelToSQL(pendingSqlClient.file, true);
+                            }}
+                        >Crear y continuar</button>
+                        <button
+                            className="bg-brand-border text-brand-text px-4 py-2 rounded-lg font-bold"
+                            onClick={() => {
+                                setPendingSqlClient(null);
+                                setFeedback({ type: 'error', message: 'Importación cancelada. No se creó el cliente.' });
+                                addLog('Importación cancelada por el usuario.');
+                            }}
+                        >Cancelar</button>
+                    </div>
+                </div>
+            </div>
+        );
     };
 
     const [isTxtClientSelectorOpen, setIsTxtClientSelectorOpen] = useState(false);
@@ -462,7 +505,8 @@ export const ImportView: React.FC<ImportViewProps> = ({
     const triggerFileUpload = (ref: React.RefObject<HTMLInputElement>) => ref.current?.click();
 
     return (
-        <div className="max-w-4xl mx-auto space-y-8 animate-fade-in">
+        <div className="max-w-7xl mx-auto py-8 animate-fade-in">
+            <ConfirmSqlClientModal />
             <div className="bg-brand-surface rounded-lg p-6 shadow-lg space-y-6">
                 <h2 className="text-2xl font-bold text-brand-text">Centro de Importación de Datos</h2>
                 <div className="flex items-center gap-4 text-sm mb-2">

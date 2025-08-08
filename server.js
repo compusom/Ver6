@@ -44,6 +44,19 @@ const TABLE_CREATION_ORDER = getCreationOrder();
 const TABLE_DELETION_ORDER = getDeletionOrder();
 
 // Helper to normalize column names to match SQL schema
+
+// Normaliza nombres de clientes para comparación y SQL
+function normalizeName(input) {
+    return (input || '')
+        .toString()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-zA-Z0-9]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+}
+
 const normalizeKey = key =>
     key
         .toString()
@@ -487,7 +500,7 @@ app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
         return res.status(400).json({ success: false, error: 'No file uploaded' });
     }
 
-    const allowCreateClient = req.query.allowCreateClient === 'true';
+    const confirmCreate = req.query.confirmCreate === '1';
     logger.info(`[SQL] Importing Excel file from ${req.file.path}`);
     try {
         const fileBuffer = fs.readFileSync(req.file.path);
@@ -506,31 +519,37 @@ app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
             return res.status(400).json({ success: false, error: 'Excel file is empty' });
         }
 
-        // Determine client from first row
+        // Extraer y normalizar nombre de cliente
         const firstRow = rows[0];
-        const clientName =
-            firstRow['nombre_de_la_cuenta'] ||
-            firstRow['Nombre de la cuenta'] ||
-            firstRow['Account name'] ||
-            'desconocido';
+        const accountName = firstRow['nombre_de_la_cuenta'] || firstRow['Nombre de la cuenta'] || firstRow['Account name'] || 'desconocido';
+        const nameNorm = normalizeName(accountName);
 
-        // Ensure client exists
+        // Buscar cliente por nameNorm
         let result = await sqlPool
             .request()
-            .input('nombre', sql.VarChar(255), clientName)
-            .query('SELECT id_cliente FROM clientes WHERE nombre_cuenta = @nombre');
+            .input('name_norm', sql.NVarChar(255), nameNorm)
+            .query('SELECT client_id, name, name_norm FROM clients WHERE name_norm = @name_norm');
         let clientId;
         if (result.recordset.length === 0) {
-            if (!allowCreateClient) {
-                return res.status(400).json({ success: false, error: `Client ${clientName} not found` });
+            if (!confirmCreate) {
+                // Responder 409 para pedir confirmación
+                return res.status(409).json({ needsConfirmation: true, accountName, nameNorm });
             }
-            result = await sqlPool
+            // Crear cliente con MERGE
+            let mergeResult = await sqlPool
                 .request()
-                .input('nombre', sql.VarChar(255), clientName)
-                .query('INSERT INTO clientes (nombre_cuenta) OUTPUT INSERTED.id_cliente VALUES (@nombre)');
-            clientId = result.recordset[0].id_cliente;
+                .input('name', sql.NVarChar(255), accountName)
+                .input('name_norm', sql.NVarChar(255), nameNorm)
+                .query(`MERGE dbo.clients AS T
+USING (SELECT @name_norm AS name_norm, @name AS name) AS S
+ON T.name_norm = S.name_norm
+WHEN MATCHED THEN UPDATE SET name = S.name
+WHEN NOT MATCHED THEN INSERT (client_id, name, name_norm) VALUES (NEWID(), S.name, S.name_norm)
+OUTPUT inserted.client_id, inserted.name, inserted.name_norm, inserted.created_at;`);
+            clientId = mergeResult.recordset[0].client_id;
+            logger.info(`[SQL] Cliente creado por confirmación: ${accountName} (${nameNorm})`);
         } else {
-            clientId = result.recordset[0].id_cliente;
+            clientId = result.recordset[0].client_id;
         }
 
         const uniqueDays = new Set();
