@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseDateForSort } from './lib/parseDateForSort.js';
+import { parseDateForSort } from './lib/parseDateForSort';
 
 describe('parseDateForSort', () => {
   it('parses DD/MM/YYYY strings', () => {

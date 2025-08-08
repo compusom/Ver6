@@ -1,5 +1,6 @@
 import { read, utils, WorkBook, WorkSheet } from 'xlsx';
 import { Client, PerformanceRecord, AllLookerData, ClientLookerData } from '../types';
+import { parseDateForSort } from './parseDateForSort';
 
 // --- UTILITY FUNCTIONS ---
 const normalizeHeader = (header: string): string => {
@@ -15,17 +16,6 @@ const parseNumber = (value: any): number => {
         return isNaN(num) ? 0 : num;
     }
     return 0;
-};
-
-const parseDateForSort = (dateStr: string): Date | null => {
-    if (!dateStr || typeof dateStr !== 'string') return null;
-    const parts = dateStr.split('/');
-    if (parts.length === 3) {
-        // Assuming DD/MM/YYYY
-        return new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
-    }
-    const date = new Date(dateStr);
-    return isNaN(date.getTime()) ? null : date;
 };
 
 // --- COLUMN MAPPING ---
