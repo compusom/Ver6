@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { AppView, User } from '../types';
+import { BUILD_NUMBER } from '../build-info';
 
 interface NavbarProps {
     currentView: AppView;
@@ -465,6 +466,9 @@ export const Navbar: React.FC<NavbarProps> = ({ currentView, onNavigate, current
                                     </svg>
                                     <span>Cerrar Sesión</span>
                                 </button>
+                                <div className="px-3 py-2 text-gray-500 text-xs">
+                                    Build #{BUILD_NUMBER}
+                                </div>
                             </div>
                         </div>
                     </div>

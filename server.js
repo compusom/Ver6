@@ -488,6 +488,7 @@ app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
     }
 
     const allowCreateClient = req.query.allowCreateClient === 'true';
+    logger.info(`[SQL] Importing Excel file from ${req.file.path}`);
     try {
         const fileBuffer = fs.readFileSync(req.file.path);
         const workbook = xlsx.read(fileBuffer, { type: 'buffer' });
@@ -691,7 +692,19 @@ app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
             await updatePS.unprepare();
             await transaction.commit();
         } catch (err) {
-            await transaction.rollback();
+            try {
+                await insertPS.unprepare();
+            } catch (e) {
+                logger.error('[SQL] Error unpreparing insert statement:', e);
+            }
+            try {
+                await updatePS.unprepare();
+            } catch (e) {
+                logger.error('[SQL] Error unpreparing update statement:', e);
+            }
+            await transaction.rollback().catch(rbErr => {
+                logger.error('[SQL] Rollback failed:', rbErr);
+            });
             throw err;
         }
 

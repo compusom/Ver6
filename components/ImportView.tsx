@@ -58,11 +58,13 @@ const ImportCard: React.FC<{
     </div>
 );
 
+export const ImportView: React.FC<ImportViewProps> = ({
+    clients, setClients, lookerData, setLookerData,
+    performanceData, setPerformanceData, bitacoraReports, setBitacoraReports,
+    onSyncFromMeta, metaApiConfig, currentUser
+}) => {
 
-export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, lookerData, setLookerData, performanceData, setPerformanceData, bitacoraReports, setBitacoraReports, onSyncFromMeta, metaApiConfig, currentUser }) => {
-    
     // Validación defensiva para props
-    // Modo de importación: Local o SQL
     const [importMode, setImportMode] = useState<'local' | 'sql'>('local');
     const safeClients = Array.isArray(clients) ? clients : [];
     const safeLookerData = lookerData && typeof lookerData === 'object' ? lookerData : {};
@@ -72,15 +74,25 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
     const [isProcessing, setIsProcessing] = useState(false);
     const [feedback, setFeedback] = useState<Feedback | null>(null);
     const [sqlConnected, setSqlConnected] = useState<boolean | null>(null);
+    const [backendConnected, setBackendConnected] = useState<boolean | null>(null);
+    const [importLogs, setImportLogs] = useState<string[]>([]);
+    const addLog = (msg: string) => {
+        setImportLogs(logs => [...logs, `[${new Date().toLocaleTimeString()}] ${msg}`]);
+    };
 
     useEffect(() => {
         const backendPort = localStorage.getItem('backend_port') || '3001';
         const checkStatus = async () => {
             try {
+                const healthRes = await fetch(`http://localhost:${backendPort}/api/health`);
+                if (!healthRes.ok) throw new Error('health check failed');
+                setBackendConnected(true);
+
                 const res = await fetch(`http://localhost:${backendPort}/api/sql/status`);
                 const data = await res.json();
                 setSqlConnected(Boolean(data.connected));
             } catch {
+                setBackendConnected(false);
                 setSqlConnected(false);
             }
         };
@@ -88,6 +100,7 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
         const interval = setInterval(checkStatus, 5000);
         return () => clearInterval(interval);
     }, []);
+
     // Helper: verifica y reconecta SQL si es necesario
     const ensureSqlConnected = async () => {
         const backendPort = localStorage.getItem('backend_port') || '3001';
@@ -111,31 +124,42 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
         }
     };
 
-    // Nueva función para importar a SQL
+    // Nueva función para importar a SQL con logs paso a paso
     const importExcelToSQL = async (file: File) => {
+        setImportLogs([]);
+        addLog(`Archivo seleccionado: ${file.name}`);
         setIsProcessing(true);
         setFeedback({ type: 'info', message: 'Verificando conexión y enviando archivo a SQL Server...' });
         try {
             const backendPort = localStorage.getItem('backend_port') || '3001';
+            const importUrl = `http://localhost:${backendPort}/api/sql/import-excel?allowCreateClient=true`;
+            addLog(`Conectando a ${importUrl}`);
             await ensureSqlConnected();
+            addLog('Conexión SQL verificada');
             const formData = new FormData();
             formData.append('file', file);
-            const response = await fetch(`http://localhost:${backendPort}/api/sql/import-excel?allowCreateClient=true`, {
+            addLog('Enviando archivo al backend...');
+            const response = await fetch(importUrl, {
                 method: 'POST',
                 body: formData,
             });
+            addLog('Esperando respuesta del servidor...');
             const result = await response.json().catch(() => ({}));
             if (!response.ok || result?.success === false) {
                 throw new Error(result?.error || 'Error al importar a SQL Server.');
             }
+            addLog('Importación completada correctamente');
             setFeedback({ type: 'success', message: `Importación a SQL exitosa: ${result.message || 'OK'}` });
             await loadSqlHistory();
         } catch (error) {
-            setFeedback({ type: 'error', message: error instanceof Error ? error.message : 'Error inesperado.' });
+            const message = error instanceof Error ? error.message : 'Error inesperado.';
+            addLog(`Error: ${message}`);
+            setFeedback({ type: 'error', message });
         } finally {
             setIsProcessing(false);
         }
     };
+
     const [isNewClientsModalOpen, setIsNewClientsModalOpen] = useState(false);
     const [isTxtClientSelectorOpen, setIsTxtClientSelectorOpen] = useState(false);
     const [isApiSyncClientSelectorOpen, setIsApiSyncClientSelectorOpen] = useState(false);
@@ -144,7 +168,7 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
     const [pendingTxtData, setPendingTxtData] = useState<{ content: string, file: File } | null>(null);
     const [importHistory, setImportHistory] = useState<ImportBatch[]>([]);
     const [sqlImportHistory, setSqlImportHistory] = useState<ImportBatch[]>([]);
-    
+
     const lookerInputRef = useRef<HTMLInputElement>(null);
     const metaInputRef = useRef<HTMLInputElement>(null);
     const txtInputRef = useRef<HTMLInputElement>(null);
@@ -173,7 +197,7 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
         setImportHistory(prev => [newBatch, ...prev]);
         await db.saveImportHistory([newBatch, ...importHistory]);
     };
-    
+
     const processAndSaveFullData = async (file: File, source: 'meta', clientList: Client[]) => {
         const fileHash = await getFileHash(file);
         const processedHashes = await db.getProcessedHashes();
@@ -183,7 +207,7 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
         }
 
         const results = await processPerformanceData(file, clientList, performanceData, source, false) as ProcessResult[];
-        
+
         setPerformanceData(current => {
             const newData = { ...current };
             results.forEach(({ client, records }) => {
@@ -193,14 +217,14 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
             console.log(`[IMPORT] New performance data structure:`, Object.keys(newData).map(clientId => `${clientId}: ${newData[clientId].length} records`));
             return newData;
         });
-        
+
         const totalNewRecords = results.reduce((acc, res) => acc + res.newRecordsCount, 0);
         if (totalNewRecords === 0) {
             setFeedback({ type: 'info', message: 'Importación completada. No se encontraron filas nuevas.' });
             return;
         }
 
-        // Send data to MCP server for each processed result
+        // Enviar data al servidor MCP por cada resultado
         for (const result of results) {
             if (result.newRecordsCount > 0) {
                 try {
@@ -214,28 +238,28 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
                     }
                 } catch (error) {
                     console.error(`[MCP] Error sending data to MCP for client ${result.client.name}:`, error);
-                    // Don't fail the entire import if MCP fails, just log it
+                    // No romper la importación si falla MCP
                 }
             }
         }
 
-        // Aggregate feedback from all results
+        // Feedback agregado
         const clientNames = results.map(r => r.client.name).join(', ');
         const periodStarts = results.map(r => r.periodStart).filter(Boolean);
         const periodEnds = results.map(r => r.periodEnd).filter(Boolean);
         const daysDetected = results.reduce((sum, r) => sum + (r.daysDetected || 0), 0);
-        
+
         const minDate = periodStarts.length > 0 ? new Date(Math.min(...periodStarts.map(d => new Date(d!).getTime()))) : null;
         const maxDate = periodEnds.length > 0 ? new Date(Math.max(...periodEnds.map(d => new Date(d!).getTime()))) : null;
 
         let periodMessage = '';
         if (minDate && maxDate) {
-            periodMessage = ` Período detectado: ${minDate.toLocaleDateString('es-ES')} - ${maxDate.toLocaleDateString('es-ES')} (${daysDetected} días).`
+            periodMessage = ` Período detectado: ${minDate.toLocaleDateString('es-ES')} - ${maxDate.toLocaleDateString('es-ES')} (${daysDetected} días).`;
         }
 
-        setFeedback({ 
-            type: 'success', 
-            message: `Importación completada. ${totalNewRecords} nuevas filas añadidas para: ${clientNames}.${periodMessage} ${mcpConnector.getConfig() ? '✅ Datos enviados al MCP' : '⚠️ MCP no configurado'}` 
+        setFeedback({
+            type: 'success',
+            message: `Importación completada. ${totalNewRecords} nuevas filas añadidas para: ${clientNames}.${periodMessage} ${mcpConnector.getConfig() ? '✅ Datos enviados al MCP' : '⚠️ MCP no configurado'}`
         });
 
         const newHashes = { ...processedHashes };
@@ -258,13 +282,13 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
     const processAndSaveLookerData = async (file: File, clientList: Client[]) => {
         const fileHash = await getFileHash(file);
         const processedHashes = await db.getProcessedHashes();
-    
+
         if (Object.values(processedHashes).flat().includes(fileHash)) {
             throw new Error(`Este archivo (${file.name}) ya ha sido importado previamente.`);
         }
-    
+
         const results = await processLookerData(file, clientList, lookerData, false) as LookerProcessResult[];
-    
+
         setLookerData(current => {
             const newData = JSON.parse(JSON.stringify(current));
             results.forEach(({ client, lookerDataPatch }) => {
@@ -275,16 +299,16 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
             });
             return newData;
         });
-    
+
         const totalNewRecords = results.reduce((acc, res) => acc + res.newRecordsCount, 0);
         if (totalNewRecords === 0) {
             setFeedback({ type: 'info', message: 'Importación de Looker completada. No se encontraron creativos nuevos.' });
             return;
         }
-    
+
         const clientNames = results.map(r => r.client.name).join(', ');
         setFeedback({ type: 'success', message: `Importación de Looker completada. ${totalNewRecords} nuevos creativos vinculados para: ${clientNames}.` });
-    
+
         const newHashes = { ...processedHashes };
         for (const result of results) {
             if (result.newRecordsCount > 0) {
@@ -301,23 +325,33 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
         }
         await db.saveProcessedHashes(newHashes);
     };
-    
+
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>, source: 'looker' | 'meta' | 'txt') => {
         const file = e.target.files?.[0];
         if (!file) return;
+
+        addLog(`Archivo recibido (${source}): ${file.name}`);
+        const isXlsx = file.name.toLowerCase().endsWith('.xlsx');
+        if (source !== 'txt' && !isXlsx) {
+            setFeedback({ type: 'error', message: 'Solo se permiten archivos .xlsx' });
+            addLog('Error: extensión no válida');
+            e.target.value = '';
+            return;
+        }
 
         if (source === 'txt') {
             handleTxtFileUpload(file);
         } else {
             handleXlsxFileUpload(file, source);
         }
-        
+
         e.target.value = '';
     };
 
     const handleXlsxFileUpload = async (file: File, source: 'looker' | 'meta') => {
         setIsProcessing(true);
         setFeedback({ type: 'info', message: `Procesando reporte de ${source}...` });
+        addLog(`Procesando reporte de ${source}`);
         try {
             if (source === 'looker') {
                 const checkResult = await processLookerData(file, safeClients, safeLookerData, true);
@@ -349,48 +383,61 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
             setIsProcessing(false);
         }
     };
-    
+
     const handleTxtFileUpload = async (file: File) => {
         try {
             const content = await file.text();
             setPendingTxtData({ content, file });
             setIsTxtClientSelectorOpen(true);
-        } catch(error) {
+        } catch (error) {
             setFeedback({ type: 'error', message: `Error al leer el archivo TXT.` });
         }
     };
-    
+
     const processTxtReport = async (clientId: string) => {
         if (!pendingTxtData) return;
         setIsTxtClientSelectorOpen(false);
         setIsProcessing(true);
         setFeedback({ type: 'info', message: 'Analizando y guardando reporte Bitácora...' });
-        
+
         try {
             const client = safeClients.find(c => c.id === clientId);
             if (!client) throw new Error("Cliente no encontrado");
 
             const fileHash = await getFileHash(pendingTxtData.file);
             const processedHashes = await db.getProcessedHashes();
-            if(processedHashes[clientId]?.includes(fileHash)) {
+            if (processedHashes[clientId]?.includes(fileHash)) {
                 throw new Error(`Este archivo (${pendingTxtData.file.name}) ya ha sido importado para este cliente.`);
             }
 
             const parsedReport = parseBitacoraReport(pendingTxtData.content);
             const reportId = crypto.randomUUID();
-            const finalReport: BitacoraReport = { ...parsedReport, id: reportId, clientId, fileName: pendingTxtData.file.name, importDate: new Date().toISOString() };
-            
-            setBitacoraReports([...bitacoraReports, finalReport]);
-            
+            const finalReport: BitacoraReport = {
+                ...parsedReport,
+                id: reportId,
+                clientId,
+                fileName: pendingTxtData.file.name,
+                importDate: new Date().toISOString()
+            };
+
+            setBitacoraReports([...safeBitacoraReports, finalReport]);
+
             setFeedback({ type: 'success', message: `Reporte "${pendingTxtData.file.name}" importado con éxito.` });
 
-            await addImportToHistory({ source: 'txt', fileName: pendingTxtData.file.name, fileHash, clientName: client.name, description: 'Reporte de bitácora añadido', undoData: { type: 'txt', keys: [reportId], clientId: clientId } });
-            
+            await addImportToHistory({
+                source: 'txt',
+                fileName: pendingTxtData.file.name,
+                fileHash,
+                clientName: client.name,
+                description: 'Reporte de bitácora añadido',
+                undoData: { type: 'txt', keys: [reportId], clientId: clientId }
+            });
+
             const updatedHashes = { ...processedHashes };
             updatedHashes[clientId] = [...(updatedHashes[clientId] || []), fileHash];
             await db.saveProcessedHashes(updatedHashes);
 
-        } catch(error) {
+        } catch (error) {
             const message = error instanceof Error ? error.message : "Error desconocido.";
             setFeedback({ type: 'error', message: `Error al procesar el reporte TXT: ${message}` });
         } finally {
@@ -404,16 +451,16 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
             id: crypto.randomUUID(),
             name: accountName,
             logo: `https://avatar.vercel.sh/${encodeURIComponent(accountName)}.png?text=${encodeURIComponent(accountName.charAt(0))}`,
-            currency: 'EUR', // Default currency
+            currency: 'EUR',
             userId: currentUser.id,
             metaAccountName: accountName,
         }));
-        
+
         const updatedClients = [...safeClients, ...newClients];
         setClients(updatedClients);
         setIsNewClientsModalOpen(false);
         Logger.info(`Created ${newClients.length} new clients from import.`);
-        
+
         if (pendingXlsxFile) {
             try {
                 if (pendingXlsxFile.source === 'looker') {
@@ -421,7 +468,7 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
                 } else {
                     await processAndSaveFullData(pendingXlsxFile.file, pendingXlsxFile.source, updatedClients);
                 }
-            } catch(e) {
+            } catch (e) {
                 const message = e instanceof Error ? e.message : "Error inesperado.";
                 setFeedback({ type: 'error', message });
             } finally {
@@ -429,18 +476,29 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
             }
         }
     };
-    
+
     const triggerFileUpload = (ref: React.RefObject<HTMLInputElement>) => ref.current?.click();
 
     return (
         <div className="max-w-4xl mx-auto space-y-8 animate-fade-in">
             <div className="bg-brand-surface rounded-lg p-6 shadow-lg space-y-6">
                 <h2 className="text-2xl font-bold text-brand-text">Centro de Importación de Datos</h2>
-                <div className="flex items-center gap-2 text-sm mb-2">
-                    <span className={`w-3 h-3 rounded-full ${sqlConnected ? 'bg-green-500' : sqlConnected === false ? 'bg-red-500' : 'bg-gray-400'}`}></span>
-                    <span className="text-brand-text">{sqlConnected ? 'SQL conectado' : sqlConnected === false ? 'SQL desconectado' : 'Verificando SQL...'}</span>
+                <div className="flex items-center gap-4 text-sm mb-2">
+                    <div className="flex items-center gap-2">
+                        <span className={`w-3 h-3 rounded-full ${backendConnected ? 'bg-green-500' : backendConnected === false ? 'bg-red-500' : 'bg-gray-400'}`}></span>
+                        <span className="text-brand-text">
+                            {backendConnected ? 'Backend conectado' : backendConnected === false ? 'Backend desconectado' : 'Verificando Backend...'}
+                        </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <span className={`w-3 h-3 rounded-full ${sqlConnected ? 'bg-green-500' : sqlConnected === false ? 'bg-red-500' : 'bg-gray-400'}`}></span>
+                        <span className="text-brand-text">
+                            {sqlConnected ? 'SQL conectado' : sqlConnected === false ? 'SQL desconectado' : 'Verificando SQL...'}
+                        </span>
+                    </div>
                 </div>
-                {/* Switch Local/SQL mejorado */}
+
+                {/* Switch Local/SQL */}
                 <div className="flex items-center gap-4 mb-4">
                     <span className="font-semibold text-brand-text">Modo de importación:</span>
                     <div className="flex items-center bg-brand-border/30 rounded-lg px-2 py-1">
@@ -461,13 +519,25 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
                             SQL
                         </button>
                     </div>
-                    <span className="ml-2 text-xs text-brand-text-secondary">{importMode === 'local' ? 'Local (almacenamiento en navegador)' : 'SQL (envía datos al servidor SQL)'}</span>
+                    <span className="ml-2 text-xs text-brand-text-secondary">
+                        {importMode === 'local' ? 'Local (almacenamiento en navegador)' : 'SQL (envía datos al servidor SQL)'}
+                    </span>
                 </div>
+
                 {feedback && (
                     <div className={`p-4 rounded-md text-sm font-semibold ${feedback.type === 'success' ? 'bg-green-500/20 text-green-300' : feedback.type === 'error' ? 'bg-red-500/20 text-red-300' : 'bg-blue-500/20 text-blue-300'}`}>
                         {feedback.message}
                     </div>
                 )}
+
+                {importLogs.length > 0 && (
+                    <div className="bg-brand-border/20 rounded p-3 text-xs font-mono h-32 overflow-y-auto mb-4 text-brand-text">
+                        {importLogs.map((log, idx) => (
+                            <div key={idx}>{log}</div>
+                        ))}
+                    </div>
+                )}
+
                 <input type="file" ref={lookerInputRef} onChange={(e) => handleFileChange(e, 'looker')} accept=".xlsx" className="hidden" />
                 <input type="file" ref={metaInputRef} onChange={(e) => handleFileChange(e, 'meta')} accept=".xlsx" className="hidden" />
                 <input type="file" ref={txtInputRef} onChange={(e) => handleFileChange(e, 'txt')} accept=".txt" className="hidden" />
@@ -475,7 +545,10 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                     <ImportCard
                         title="Rendimiento (Meta)"
-                        description={importMode === 'local' ? "Sube el XLSX exportado desde Meta Ads para importar los datos de rendimiento de las campañas." : "Sube el XLSX exportado desde Meta Ads para enviar los datos directamente al servidor SQL."}
+                        description={importMode === 'local'
+                            ? "Sube el XLSX exportado desde Meta Ads para importar los datos de rendimiento de las campañas."
+                            : "Sube el XLSX exportado desde Meta Ads para enviar los datos directamente al servidor SQL."
+                        }
                         icon={<svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" viewBox="0 0 20 20" fill="currentColor"><path d="M5 11a1 1 0 011-1h8a1 1 0 110 2H6a1 1 0 01-1-1z" /><path fillRule="evenodd" d="M3 3a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V3zm2 5a1 1 0 011-1h8a1 1 0 110 2H6a1 1 0 01-1-1zm-1 5a1 1 0 00-1 1v2a1 1 0 001 1h12a1 1 0 001-1v-2a1 1 0 00-1-1H4z" clipRule="evenodd" /></svg>}
                         onButtonClick={() => triggerFileUpload(metaInputRef)}
                         buttonText={importMode === 'local' ? "Subir XLSX de Meta" : "Enviar XLSX a SQL"}
@@ -498,9 +571,12 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
                         disabled={isProcessing}
                     />
                 </div>
+
                 <div className="border-t border-brand-border pt-6">
                     <h3 className="text-lg font-semibold text-brand-text mb-2">Sincronización API</h3>
-                    <p className="text-sm text-brand-text-secondary mb-4">Sincroniza datos directamente desde la API de Meta para los clientes que tengan un "Nombre de Cuenta de Meta" configurado.</p>
+                    <p className="text-sm text-brand-text-secondary mb-4">
+                        Sincroniza datos directamente desde la API de Meta para los clientes que tengan un "Nombre de Cuenta de Meta" configurado.
+                    </p>
                     <button
                         onClick={() => setIsApiSyncClientSelectorOpen(true)}
                         disabled={!metaApiConfig}
@@ -512,9 +588,29 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
                 </div>
             </div>
 
-            <NewClientsModal isOpen={isNewClientsModalOpen} onClose={() => setIsNewClientsModalOpen(false)} newAccountNames={newAccountNames} onConfirm={handleCreateNewClients} />
-            <ClientSelectorModal isOpen={isTxtClientSelectorOpen} onClose={() => setIsTxtClientSelectorOpen(false)} clients={safeClients} onClientSelect={processTxtReport} title="Seleccionar Cliente para Reporte TXT" description="Elige a qué cliente pertenece este reporte de Bitácora."/>
-            <ClientSelectorModal isOpen={isApiSyncClientSelectorOpen} onClose={() => setIsApiSyncClientSelectorOpen(false)} clients={safeClients.filter(c => c.metaAccountName)} onClientSelect={onSyncFromMeta} title="Seleccionar Cliente para Sincronizar" description="Elige qué cliente quieres sincronizar desde la API de Meta."/>
+            <NewClientsModal
+                isOpen={isNewClientsModalOpen}
+                onClose={() => setIsNewClientsModalOpen(false)}
+                newAccountNames={newAccountNames}
+                onConfirm={handleCreateNewClients}
+            />
+            <ClientSelectorModal
+                isOpen={isTxtClientSelectorOpen}
+                onClose={() => setIsTxtClientSelectorOpen(false)}
+                clients={safeClients}
+                onClientSelect={processTxtReport}
+                title="Seleccionar Cliente para Reporte TXT"
+                description="Elige a qué cliente pertenece este reporte de Bitácora."
+            />
+            <ClientSelectorModal
+                isOpen={isApiSyncClientSelectorOpen}
+                onClose={() => setIsApiSyncClientSelectorOpen(false)}
+                clients={safeClients.filter(c => c.metaAccountName)}
+                onClientSelect={onSyncFromMeta}
+                title="Seleccionar Cliente para Sincronizar"
+                description="Elige qué cliente quieres sincronizar desde la API de Meta."
+            />
+
             <ImportHistory title="Historial de Importaciones Local" history={importHistory} setHistory={setImportHistory} setLookerData={setLookerData} />
             <ImportHistory title="Historial de Importaciones SQL" history={sqlImportHistory} setHistory={setSqlImportHistory} setLookerData={setLookerData} allowUndo={false} />
         </div>
