@@ -28,6 +28,15 @@ Este repositorio contiene todo lo necesario para ejecutar la app localmente.
 3. Inicia el sistema:
    `npm run start` (esto ejecuta frontend y backend juntos)
 
+### Pruebas de importación de Meta
+
+Para verificar el nuevo flujo de importación de reportes de Meta:
+
+1. Prepara un archivo XLSX con columnas `account_name`, `date` y `ad_id` más métricas.
+2. Caso 1: si el `account_name` no existe, al importar se crea un nuevo cliente y se insertan las métricas.
+3. Caso 2: si el cliente ya existe, se actualizan o insertan métricas sin duplicados gracias al índice `(client_id,date,ad_id)`.
+4. Reimportar el mismo archivo no debe generar filas duplicadas; el log mostrará conteos de filas insertadas y actualizadas.
+
 ## Número de compilación
 
 El número de compilación del sistema se mantiene en [`build-info.ts`](build-info.ts).
