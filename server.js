@@ -76,6 +76,37 @@ const METRIC_COLUMNS = Array.from(METRIC_COLUMN_MAP.values());
 const NUMERIC_COLUMNS = new Set(
     METRIC_COLUMN_DEFINITIONS.filter(def => /INT|DECIMAL|BIGINT|FLOAT|REAL/i.test(def.type)).map(def => def.name)
 );
+const DATE_COLUMNS = new Set(
+    METRIC_COLUMN_DEFINITIONS.filter(def => /DATE/i.test(def.type)).map(def => def.name)
+);
+
+// Mapear tipos de columnas SQL Server a tipos de mssql para parámetros preparados
+function toMssqlType(sqlTypeStr) {
+    if (!sqlTypeStr || typeof sqlTypeStr !== 'string') return sql.VarChar(sql.MAX);
+    const t = sqlTypeStr.toUpperCase();
+    // Extraer tamaños/precision si existen
+    const dec = t.match(/DECIMAL\s*\((\d+)\s*,\s*(\d+)\)/);
+    const numeric = t.match(/NUMERIC\s*\((\d+)\s*,\s*(\d+)\)/);
+    const varchar = t.match(/VARCHAR\s*\((\d+)\)/);
+    const nvarchar = t.match(/NVARCHAR\s*\((\d+)\)/);
+    if (dec) return sql.Decimal(parseInt(dec[1], 10), parseInt(dec[2], 10));
+    if (numeric) return sql.Numeric(parseInt(numeric[1], 10), parseInt(numeric[2], 10));
+    if (t.includes('BIGINT')) return sql.BigInt;
+    if (t.includes('INT')) return sql.Int;
+    if (t.includes('FLOAT')) return sql.Float;
+    if (t.includes('REAL')) return sql.Real;
+    if (t.startsWith('DATE') && !t.includes('TIME')) return sql.Date;
+    if (t.includes('DATETIME')) return sql.DateTime;
+    if (t.includes('TEXT')) return sql.VarChar(sql.MAX);
+    if (varchar) return sql.VarChar(parseInt(varchar[1], 10));
+    if (nvarchar) return sql.NVarChar(parseInt(nvarchar[1], 10));
+    // Fallback seguro
+    return sql.VarChar(sql.MAX);
+}
+
+const MSSQL_TYPE_MAP = new Map(
+    METRIC_COLUMN_DEFINITIONS.map(def => [def.name, toMssqlType(def.type)])
+);
 
 // Utility numeric parser mirroring the client-side logic
 const parseNumber = (value) => {
@@ -506,7 +537,14 @@ app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
                 original[nk] = v;
                 const colName = METRIC_COLUMN_MAP.get(nk);
                 if (colName) {
-                    normalized[colName] = NUMERIC_COLUMNS.has(colName) ? parseNumber(v) : v;
+                    if (NUMERIC_COLUMNS.has(colName)) {
+                        normalized[colName] = parseNumber(v);
+                    } else if (DATE_COLUMNS.has(colName)) {
+                        const d = parseDateForSort(v);
+                        normalized[colName] = d ? new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())) : null;
+                    } else {
+                        normalized[colName] = v;
+                    }
                 }
             }
             const uniqueId = `${original.dia || original.day}_${
@@ -577,50 +615,65 @@ app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
         try {
             const metricCols = METRIC_COLUMNS.filter(c => c !== 'unique_id');
             const allParams = ['id_reporte', 'unique_id', ...metricCols];
+
+            // Create a safe parameter name (ASCII only) for each column/param
+            const toParam = (col) => 'p_' + normalizeKey(col);
+
+            // Prepare INSERT statement with safe parameter names
             const insertPS = new sql.PreparedStatement(transaction);
             allParams.forEach(col => {
-                if (col === 'id_reporte') insertPS.input(col, sql.Int);
-                else if (col === 'unique_id') insertPS.input(col, sql.NVarChar(255));
-                else if (NUMERIC_COLUMNS.has(col)) insertPS.input(col, sql.Float);
-                else insertPS.input(col, sql.NVarChar);
+                const p = toParam(col);
+                if (col === 'id_reporte') insertPS.input(p, sql.Int);
+                else {
+                    // usar el tipo exacto de columna definido en la tabla
+                    const type = MSSQL_TYPE_MAP.get(col) || sql.VarChar(sql.MAX);
+                    insertPS.input(p, type);
+                }
             });
             await insertPS.prepare(
                 `INSERT INTO metricas (${allParams.map(c => `[${c}]`).join(', ')}) VALUES (${allParams
-                    .map(c => `@${c}`)
+                    .map(c => `@${toParam(c)}`)
                     .join(', ')})`
             );
 
-            const updateCols = ['id_reporte', ...metricCols];
+            // Prepare UPDATE statement (do not move rows across reports)
+            const updateCols = metricCols; // exclude id_reporte from SET
             const updatePS = new sql.PreparedStatement(transaction);
-            updatePS.input('unique_id', sql.NVarChar(255));
+            updatePS.input(toParam('unique_id'), MSSQL_TYPE_MAP.get('unique_id') || sql.VarChar(255));
+            updatePS.input(toParam('id_reporte'), sql.Int);
             updateCols.forEach(col => {
-                if (col === 'id_reporte') updatePS.input(col, sql.Int);
-                else if (NUMERIC_COLUMNS.has(col)) updatePS.input(col, sql.Float);
-                else updatePS.input(col, sql.NVarChar);
+                const p = toParam(col);
+                const type = MSSQL_TYPE_MAP.get(col) || sql.VarChar(sql.MAX);
+                updatePS.input(p, type);
             });
             await updatePS.prepare(
                 `UPDATE metricas SET ${updateCols
-                    .map(c => `[${c}] = @${c}`)
-                    .join(', ')} WHERE unique_id = @unique_id`
+                    .map(c => `[${c}] = @${toParam(c)}`)
+                    .join(', ')} WHERE unique_id = @${toParam('unique_id')} AND id_reporte = @${toParam('id_reporte')}`
             );
 
             for (const rec of records) {
                 rec.id_reporte = reportId;
+
+                // Check existence within the same report only
                 const exists = await new sql.Request(transaction)
-                    .input('unique_id', sql.NVarChar, rec.unique_id)
-                    .query('SELECT 1 FROM metricas WHERE unique_id = @unique_id');
+                    .input(toParam('unique_id'), sql.NVarChar(255), rec.unique_id)
+                    .input(toParam('id_reporte'), sql.Int, reportId)
+                    .query(`SELECT 1 FROM metricas WHERE unique_id = @${toParam('unique_id')} AND id_reporte = @${toParam('id_reporte')}`);
+
                 if (exists.recordset.length > 0) {
                     const updateParams = {};
                     updateCols.forEach(col => {
-                        updateParams[col] = rec[col] ?? null;
+                        updateParams[toParam(col)] = rec[col] ?? null;
                     });
-                    updateParams.unique_id = rec.unique_id;
+                    updateParams[toParam('unique_id')] = rec.unique_id;
+                    updateParams[toParam('id_reporte')] = reportId;
                     await updatePS.execute(updateParams);
                     updated++;
                 } else {
                     const insertParams = {};
                     allParams.forEach(col => {
-                        insertParams[col] = rec[col] ?? null;
+                        insertParams[toParam(col)] = rec[col] ?? null;
                     });
                     await insertPS.execute(insertParams);
                     inserted++;

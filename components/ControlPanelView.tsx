@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useCallback } from 'react';
 import { notify } from './notificationService';
 import db from '../database';
@@ -122,8 +121,8 @@ export const ControlPanelView: React.FC = () => {
                 window.location.reload();
             } else {
                 // Si no se puede recargar, fuerza actualización de estado global
-                if (window.getProcessedHashes) {
-                    window.getProcessedHashes();
+                if ((window as any).getProcessedHashes) {
+                    (window as any).getProcessedHashes();
                 }
             }
             addLog('✅ Base de datos limpiada con éxito. La aplicación se reiniciará.');
@@ -134,6 +133,49 @@ export const ControlPanelView: React.FC = () => {
             const errorMessage = e instanceof Error ? e.message : String(e);
             addLog(`❌ Error durante la limpieza: ${errorMessage}`);
             notify('Ocurrió un error al intentar limpiar la base de datos.', 'error');
+        }
+    };
+
+    // Verifica y reconecta SQL antes de importar
+    const ensureSqlConnected = async () => {
+        const backendPort = localStorage.getItem('backend_port') || '3001';
+        const statusRes = await fetch(`http://localhost:${backendPort}/api/sql/status`);
+        const status = await statusRes.json();
+        if (!status.connected) {
+            // Reconectar usando credenciales guardadas
+            const server = localStorage.getItem('sql_server') || '';
+            const port = localStorage.getItem('sql_port') || '';
+            const database = localStorage.getItem('sql_database') || '';
+            const user = localStorage.getItem('sql_user') || '';
+            const password = sessionStorage.getItem('sql_password') || localStorage.getItem('sql_password') || '';
+            const connectRes = await fetch(`http://localhost:${backendPort}/api/sql/connect`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ server, port, database, user, password })
+            });
+            const connectData = await connectRes.json();
+            if (!connectData.success) {
+                throw new Error('No se pudo reconectar a SQL Server: ' + (connectData.error || 'Error desconocido'));
+            }
+        }
+    };
+
+    // Ejemplo de uso antes de importar Excel
+    const handleImportExcel = async (file, allowCreateClient = false) => {
+        try {
+            await ensureSqlConnected();
+            // ...lógica de importación existente...
+            // Por ejemplo:
+            // const formData = new FormData();
+            // formData.append('file', file);
+            // const res = await fetch(`/api/sql/import-excel?allowCreateClient=${allowCreateClient}`, {
+            //     method: 'POST',
+            //     body: formData
+            // });
+            // const data = await res.json();
+            // ...manejo de respuesta...
+        } catch (err) {
+            notify('Error de conexión SQL: ' + err.message, 'error');
         }
     };
 

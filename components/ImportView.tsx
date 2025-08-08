@@ -71,21 +71,46 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
     
     const [isProcessing, setIsProcessing] = useState(false);
     const [feedback, setFeedback] = useState<Feedback | null>(null);
+    // Helper: verifica y reconecta SQL si es necesario
+    const ensureSqlConnected = async () => {
+        const backendPort = localStorage.getItem('backend_port') || '3001';
+        const statusRes = await fetch(`http://localhost:${backendPort}/api/sql/status`);
+        const status = await statusRes.json();
+        if (!status.connected) {
+            const server = localStorage.getItem('sql_server') || '';
+            const port = localStorage.getItem('sql_port') || '';
+            const database = localStorage.getItem('sql_database') || '';
+            const user = localStorage.getItem('sql_user') || '';
+            const password = sessionStorage.getItem('sql_password') || '';
+            const connectRes = await fetch(`http://localhost:${backendPort}/api/sql/connect`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ server, port, database, user, password })
+            });
+            const connectData = await connectRes.json();
+            if (!connectData.success) {
+                throw new Error(connectData.error || 'No se pudo reconectar a SQL Server');
+            }
+        }
+    };
+
     // Nueva función para importar a SQL
     const importExcelToSQL = async (file: File) => {
         setIsProcessing(true);
-        setFeedback({ type: 'info', message: 'Enviando archivo a SQL Server...' });
+        setFeedback({ type: 'info', message: 'Verificando conexión y enviando archivo a SQL Server...' });
         try {
+            const backendPort = localStorage.getItem('backend_port') || '3001';
+            await ensureSqlConnected();
             const formData = new FormData();
             formData.append('file', file);
-            const response = await fetch('/api/sql/import-excel?allowCreateClient=true', {
+            const response = await fetch(`http://localhost:${backendPort}/api/sql/import-excel?allowCreateClient=true`, {
                 method: 'POST',
                 body: formData,
             });
-            if (!response.ok) {
-                throw new Error('Error al importar a SQL Server.');
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok || result?.success === false) {
+                throw new Error(result?.error || 'Error al importar a SQL Server.');
             }
-            const result = await response.json();
             setFeedback({ type: 'success', message: `Importación a SQL exitosa: ${result.message || 'OK'}` });
             await loadSqlHistory();
         } catch (error) {
@@ -205,7 +230,7 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
                     fileHash,
                     clientName: result.client.name,
                     description: `${result.newRecordsCount} filas de rendimiento añadidas`,
-                    undoData: { type: 'meta', keys: result.undoKeys, clientId: result.client.id }
+                    undoData: { type: 'meta', keys: [result.client.id], clientId: result.client.id }
                 });
                 newHashes[result.client.id] = [...(newHashes[result.client.id] || []), fileHash];
             }

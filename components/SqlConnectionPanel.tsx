@@ -93,6 +93,7 @@ export const SqlConnectionPanel: React.FC = () => {
             if (!status.connected) {
                 setConnectionAlert(true);
                 // Intentar reconectar automáticamente usando las últimas credenciales
+                const savedPassword = sessionStorage.getItem('sql_password') || password;
                 await fetchJson('/api/sql/connect', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -101,7 +102,7 @@ export const SqlConnectionPanel: React.FC = () => {
                         port: localStorage.getItem('sql_port') || port,
                         database: localStorage.getItem('sql_database') || database,
                         user: localStorage.getItem('sql_user') || user,
-                        password,
+                        password: savedPassword,
                     }),
                 });
                 await checkStatus();
@@ -128,6 +129,12 @@ export const SqlConnectionPanel: React.FC = () => {
                     password,
                 }),
             });
+            // Guardar credenciales (password en sessionStorage)
+            localStorage.setItem('sql_server', server);
+            localStorage.setItem('sql_port', port);
+            localStorage.setItem('sql_database', database);
+            localStorage.setItem('sql_user', user);
+            sessionStorage.setItem('sql_password', password);
             if (data.success) {
                 setMessage('Conexión exitosa');
             } else {
