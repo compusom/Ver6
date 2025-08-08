@@ -627,81 +627,47 @@ app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
             // Create a safe parameter name (ASCII only) for each column/param
             const toParam = (col) => 'p_' + normalizeKey(col);
 
-            // Prepare INSERT statement with safe parameter names
-            const insertPS = new sql.PreparedStatement(transaction);
-            allParams.forEach(col => {
-                const p = toParam(col);
-                if (col === 'id_reporte') insertPS.input(p, sql.Int);
-                else {
-                    // usar el tipo exacto de columna definido en la tabla
-                    const type = MSSQL_TYPE_MAP.get(col) || sql.VarChar(sql.MAX);
-                    insertPS.input(p, type);
-                }
-            });
-            await insertPS.prepare(
-                `INSERT INTO metricas (${allParams.map(c => `[${c}]`).join(', ')}) VALUES (${allParams
-                    .map(c => `@${toParam(c)}`)
-                    .join(', ')})`
-            );
-
-            // Prepare UPDATE statement (do not move rows across reports)
             const updateCols = metricCols; // exclude id_reporte from SET
-            const updatePS = new sql.PreparedStatement(transaction);
-            updatePS.input(toParam('unique_id'), MSSQL_TYPE_MAP.get('unique_id') || sql.VarChar(255));
-            updatePS.input(toParam('id_reporte'), sql.Int);
-            updateCols.forEach(col => {
-                const p = toParam(col);
-                const type = MSSQL_TYPE_MAP.get(col) || sql.VarChar(sql.MAX);
-                updatePS.input(p, type);
-            });
-            await updatePS.prepare(
-                `UPDATE metricas SET ${updateCols
-                    .map(c => `[${c}] = @${toParam(c)}`)
-                    .join(', ')} WHERE unique_id = @${toParam('unique_id')} AND id_reporte = @${toParam('id_reporte')}`
-            );
 
             for (const rec of records) {
                 rec.id_reporte = reportId;
 
-                // Check existence within the same report only
-                const exists = await new sql.Request(transaction)
-                    .input(toParam('unique_id'), sql.NVarChar(255), rec.unique_id)
-                    .input(toParam('id_reporte'), sql.Int, reportId)
-                    .query(`SELECT 1 FROM metricas WHERE unique_id = @${toParam('unique_id')} AND id_reporte = @${toParam('id_reporte')}`);
+                // First attempt an update within the same report
+                const updateReq = transaction.request();
+                updateReq.input(toParam('unique_id'), MSSQL_TYPE_MAP.get('unique_id') || sql.VarChar(255), rec.unique_id);
+                updateReq.input(toParam('id_reporte'), sql.Int, reportId);
+                updateCols.forEach(col => {
+                    const type = MSSQL_TYPE_MAP.get(col) || sql.VarChar(sql.MAX);
+                    updateReq.input(toParam(col), type, rec[col] ?? null);
+                });
+                const updateResult = await updateReq.query(
+                    `UPDATE metricas SET ${updateCols
+                        .map(c => `[${c}] = @${toParam(c)}`)
+                        .join(', ')} WHERE unique_id = @${toParam('unique_id')} AND id_reporte = @${toParam('id_reporte')}`
+                );
 
-                if (exists.recordset.length > 0) {
-                    const updateParams = {};
-                    updateCols.forEach(col => {
-                        updateParams[toParam(col)] = rec[col] ?? null;
-                    });
-                    updateParams[toParam('unique_id')] = rec.unique_id;
-                    updateParams[toParam('id_reporte')] = reportId;
-                    await updatePS.execute(updateParams);
+                if (updateResult.rowsAffected[0] > 0) {
                     updated++;
-                } else {
-                    const insertParams = {};
-                    allParams.forEach(col => {
-                        insertParams[toParam(col)] = rec[col] ?? null;
-                    });
-                    await insertPS.execute(insertParams);
-                    inserted++;
+                    continue;
                 }
+
+                // If no rows updated, insert new record
+                const insertReq = transaction.request();
+                allParams.forEach(col => {
+                    const type = MSSQL_TYPE_MAP.get(col) || sql.VarChar(sql.MAX);
+                    const paramType = col === 'id_reporte' ? sql.Int : type;
+                    insertReq.input(toParam(col), paramType, rec[col] ?? null);
+                });
+                await insertReq.query(
+                    `INSERT INTO metricas (${allParams.map(c => `[${c}]`).join(', ')}) VALUES (${allParams
+                        .map(c => `@${toParam(c)}`)
+                        .join(', ')})`
+                );
+                inserted++;
             }
 
-            await insertPS.unprepare();
-            await updatePS.unprepare();
             await transaction.commit();
         } catch (err) {
-            try {
-                await insertPS.unprepare();
-            } catch (e) {
-                logger.error('[SQL] Error unpreparing insert statement:', e);
-            }
-            try {
-                await updatePS.unprepare();
-            } catch (e) {
-                logger.error('[SQL] Error unpreparing update statement:', e);
-            }
             await transaction.rollback().catch(rbErr => {
                 logger.error('[SQL] Rollback failed:', rbErr);
             });
