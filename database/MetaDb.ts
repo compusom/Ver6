@@ -192,14 +192,16 @@ SELECT client_id, name, name_norm, created_at FROM @out;`);
         .input('clientId', sql.UniqueIdentifier, row.clientId)
         .input('adId', sql.NVarChar(255), row.adId)
         .input('name', sql.NVarChar(255), row.name)
-        .input('nameNorm', sql.NVarChar(255), row.nameNorm);
+        .input('nameNorm', sql.NVarChar(255), row.nameNorm)
+        .input('prev', sql.NVarChar(sql.MAX), row.adPreviewLink ?? null)
+        .input('thumb', sql.NVarChar(sql.MAX), row.adCreativeThumbnailUrl ?? null);
       const result = await request.query(`
 CREATE TABLE #actions (action NVARCHAR(10));
 MERGE ads AS target
-USING (SELECT @clientId AS client_id, @adId AS ad_id, @name AS name, @nameNorm AS ad_name_norm) AS source
+USING (SELECT @clientId AS client_id, @adId AS ad_id, @name AS name, @nameNorm AS ad_name_norm, @prev AS ad_preview_link, @thumb AS ad_creative_thumbnail_url) AS source
 ON (target.client_id = source.client_id AND target.ad_id = source.ad_id)
-WHEN MATCHED THEN UPDATE SET name = source.name, ad_name_norm = source.ad_name_norm
-WHEN NOT MATCHED THEN INSERT (client_id, ad_id, name, ad_name_norm) VALUES (source.client_id, source.ad_id, source.name, source.ad_name_norm)
+WHEN MATCHED THEN UPDATE SET name = source.name, ad_name_norm = source.ad_name_norm, ad_preview_link = source.ad_preview_link, ad_creative_thumbnail_url = source.ad_creative_thumbnail_url
+WHEN NOT MATCHED THEN INSERT (client_id, ad_id, name, ad_name_norm, ad_preview_link, ad_creative_thumbnail_url) VALUES (source.client_id, source.ad_id, source.name, source.ad_name_norm, source.ad_preview_link, source.ad_creative_thumbnail_url)
 OUTPUT $action INTO #actions;
 SELECT action FROM #actions;
 DROP TABLE #actions;
