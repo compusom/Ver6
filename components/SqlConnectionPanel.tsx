@@ -175,9 +175,8 @@ export const SqlConnectionPanel: React.FC = () => {
         Logger.info('[SQL][EnsureSchema] start');
         try {
             const data = await fetchJson('/api/sql/ensure-schema', { method: 'POST' });
-            if (data.actions) {
-                const summary = data.actions.map((a: any) => `${a.table}:${a.action}`).join(', ');
-                setMessage(summary || 'Esquema verificado');
+            if (data.ok) {
+                setMessage('Esquema verificado');
             } else if (data.error) {
                 setMessage(data.error);
             } else {
