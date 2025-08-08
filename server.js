@@ -596,23 +596,22 @@ app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
             .input('hash_archivo', sql.Char(64), fileHash)
             .query('SELECT id_reporte FROM archivos_reporte WHERE hash_archivo = @hash_archivo');
 
-        let reportId;
         if (existingReport.recordset.length > 0) {
-            reportId = existingReport.recordset[0].id_reporte;
-        } else {
-            const report = await sqlPool
-                .request()
-                .input('id_cliente', sql.Int, clientId)
-                .input('nombre_archivo', sql.VarChar(255), req.file.originalname)
-                .input('hash_archivo', sql.Char(64), fileHash)
-                .input('period_start', sql.Date, periodStart)
-                .input('period_end', sql.Date, periodEnd)
-                .input('days_detected', sql.Int, daysDetected)
-                .query(
-                    'INSERT INTO archivos_reporte (id_cliente, nombre_archivo, hash_archivo, period_start, period_end, days_detected) OUTPUT INSERTED.id_reporte VALUES (@id_cliente, @nombre_archivo, @hash_archivo, @period_start, @period_end, @days_detected)'
-                );
-            reportId = report.recordset[0].id_reporte;
+            return res.status(400).json({ success: false, error: 'Este archivo ya fue importado anteriormente' });
         }
+
+        const report = await sqlPool
+            .request()
+            .input('id_cliente', sql.Int, clientId)
+            .input('nombre_archivo', sql.VarChar(255), req.file.originalname)
+            .input('hash_archivo', sql.Char(64), fileHash)
+            .input('period_start', sql.Date, periodStart)
+            .input('period_end', sql.Date, periodEnd)
+            .input('days_detected', sql.Int, daysDetected)
+            .query(
+                'INSERT INTO archivos_reporte (id_cliente, nombre_archivo, hash_archivo, period_start, period_end, days_detected) OUTPUT INSERTED.id_reporte VALUES (@id_cliente, @nombre_archivo, @hash_archivo, @period_start, @period_end, @days_detected)'
+            );
+        const reportId = report.recordset[0].id_reporte;
 
         let inserted = 0;
         let updated = 0;
@@ -687,7 +686,10 @@ app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
             periodEnd,
             daysDetected
         };
-        db.prepare('INSERT INTO import_history (batch_data) VALUES (?)').run(JSON.stringify(history));
+        await sqlPool
+            .request()
+            .input('batch_data', sql.NVarChar(sql.MAX), JSON.stringify(history))
+            .query('INSERT INTO import_history (batch_data) VALUES (@batch_data)');
 
         res.json({ success: true, inserted, updated, skipped, clientName, periodStart, periodEnd });
     } catch (error) {
@@ -699,10 +701,13 @@ app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
 });
 
 // Get SQL import history
-app.get('/api/sql/import-history', (req, res) => {
+app.get('/api/sql/import-history', async (req, res) => {
+    if (!sqlPool) {
+        return res.status(400).json({ success: false, error: 'Not connected' });
+    }
     try {
-        const rows = db.prepare('SELECT batch_data FROM import_history ORDER BY created_at DESC').all();
-        const history = rows.map(r => JSON.parse(r.batch_data));
+        const result = await sqlPool.request().query('SELECT batch_data FROM import_history ORDER BY created_at DESC');
+        const history = result.recordset.map(r => JSON.parse(r.batch_data));
         res.json({ success: true, history });
     } catch (error) {
         logger.error('[Server] Error loading SQL import history:', error);

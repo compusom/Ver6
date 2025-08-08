@@ -1,6 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Client, PerformanceRecord, AllLookerData, BitacoraReport, ImportBatch, MetaApiConfig, User, LookerProcessResult, ProcessResult } from '../types';
-import { NewClientsModal } from './NewClientsModal';
 import db from '../database';
 import Logger from '../Logger';
 import { parseBitacoraReport } from '../lib/txtReportParser';
@@ -160,11 +159,8 @@ export const ImportView: React.FC<ImportViewProps> = ({
         }
     };
 
-    const [isNewClientsModalOpen, setIsNewClientsModalOpen] = useState(false);
     const [isTxtClientSelectorOpen, setIsTxtClientSelectorOpen] = useState(false);
     const [isApiSyncClientSelectorOpen, setIsApiSyncClientSelectorOpen] = useState(false);
-    const [newAccountNames, setNewAccountNames] = useState<string[]>([]);
-    const [pendingXlsxFile, setPendingXlsxFile] = useState<{ file: File, source: 'looker' | 'meta' } | null>(null);
     const [pendingTxtData, setPendingTxtData] = useState<{ content: string, file: File } | null>(null);
     const [importHistory, setImportHistory] = useState<ImportBatch[]>([]);
     const [sqlImportHistory, setSqlImportHistory] = useState<ImportBatch[]>([]);
@@ -356,21 +352,28 @@ export const ImportView: React.FC<ImportViewProps> = ({
             if (source === 'looker') {
                 const checkResult = await processLookerData(file, safeClients, safeLookerData, true);
                 if ('newAccountNames' in checkResult && checkResult.newAccountNames.length > 0) {
-                    setNewAccountNames(checkResult.newAccountNames);
-                    setPendingXlsxFile({ file, source });
-                    setIsNewClientsModalOpen(true);
-                } else {
-                    await processAndSaveLookerData(file, safeClients);
+                    setFeedback({ type: 'error', message: `Clientes no encontrados: ${checkResult.newAccountNames.join(', ')}` });
                 }
+                await processAndSaveLookerData(file, safeClients);
             } else {
                 if (importMode === 'sql') {
                     await importExcelToSQL(file);
                 } else {
                     const checkResult = await processPerformanceData(file, safeClients, safePerformanceData, source, true);
                     if ('newAccountNames' in checkResult && checkResult.newAccountNames.length > 0) {
-                        setNewAccountNames(checkResult.newAccountNames);
-                        setPendingXlsxFile({ file, source });
-                        setIsNewClientsModalOpen(true);
+                        const newClients: Client[] = checkResult.newAccountNames.map(accountName => ({
+                            id: crypto.randomUUID(),
+                            name: accountName,
+                            logo: `https://avatar.vercel.sh/${encodeURIComponent(accountName)}.png?text=${encodeURIComponent(accountName.charAt(0))}`,
+                            currency: 'EUR',
+                            userId: currentUser.id,
+                            metaAccountName: accountName,
+                        }));
+                        const updatedClients = [...safeClients, ...newClients];
+                        setClients(updatedClients);
+                        await db.saveClients(updatedClients);
+                        Logger.info(`Created ${newClients.length} new clients from import.`);
+                        await processAndSaveFullData(file, source, updatedClients);
                     } else {
                         await processAndSaveFullData(file, source, safeClients);
                     }
@@ -443,37 +446,6 @@ export const ImportView: React.FC<ImportViewProps> = ({
         } finally {
             setIsProcessing(false);
             setPendingTxtData(null);
-        }
-    };
-
-    const handleCreateNewClients = async (accountsToCreate: string[]) => {
-        const newClients: Client[] = accountsToCreate.map(accountName => ({
-            id: crypto.randomUUID(),
-            name: accountName,
-            logo: `https://avatar.vercel.sh/${encodeURIComponent(accountName)}.png?text=${encodeURIComponent(accountName.charAt(0))}`,
-            currency: 'EUR',
-            userId: currentUser.id,
-            metaAccountName: accountName,
-        }));
-
-        const updatedClients = [...safeClients, ...newClients];
-        setClients(updatedClients);
-        setIsNewClientsModalOpen(false);
-        Logger.info(`Created ${newClients.length} new clients from import.`);
-
-        if (pendingXlsxFile) {
-            try {
-                if (pendingXlsxFile.source === 'looker') {
-                    await processAndSaveLookerData(pendingXlsxFile.file, updatedClients);
-                } else {
-                    await processAndSaveFullData(pendingXlsxFile.file, pendingXlsxFile.source, updatedClients);
-                }
-            } catch (e) {
-                const message = e instanceof Error ? e.message : "Error inesperado.";
-                setFeedback({ type: 'error', message });
-            } finally {
-                setPendingXlsxFile(null);
-            }
         }
     };
 
@@ -588,12 +560,6 @@ export const ImportView: React.FC<ImportViewProps> = ({
                 </div>
             </div>
 
-            <NewClientsModal
-                isOpen={isNewClientsModalOpen}
-                onClose={() => setIsNewClientsModalOpen(false)}
-                newAccountNames={newAccountNames}
-                onConfirm={handleCreateNewClients}
-            />
             <ClientSelectorModal
                 isOpen={isTxtClientSelectorOpen}
                 onClose={() => setIsTxtClientSelectorOpen(false)}

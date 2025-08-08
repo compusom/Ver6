@@ -1,5 +1,6 @@
 
 import React, { useState } from 'react';
+import { BUILD_NUMBER } from '../build-info';
 
 interface LoginViewProps {
     onLogin: (user: string, pass: string) => boolean;
@@ -170,6 +171,9 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
                         </button>
                     </div>
                 </div>
+            </div>
+            <div className="absolute bottom-2 right-4 text-xs text-brand-text-secondary">
+                Build #{BUILD_NUMBER}
             </div>
         </div>
     );

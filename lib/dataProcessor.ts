@@ -240,9 +240,7 @@ export const processLookerData = async (
         return { newAccountNames };
     }
 
-    if (newAccountNames.length > 0) {
-        throw new Error(`Nuevas cuentas encontradas en archivo de Looker: ${newAccountNames.join(', ')}. Por favor, créalas primero.`);
-    }
+    // Si hay cuentas no registradas, simplemente se omiten en la importación
 
     const results: LookerProcessResult[] = [];
     const knownAccountNames = uniqueAccountNames.filter(name => clients.some(c => c.metaAccountName === name || c.name === name));
@@ -334,9 +332,7 @@ export const processPerformanceData = async (
         return { newAccountNames };
     }
 
-    if (newAccountNames.length > 0) {
-        throw new Error(`Nuevas cuentas encontradas: ${newAccountNames.join(', ')}. Por favor, créalas primero.`);
-    }
+    // Si se detectan nuevas cuentas, la importación puede manejar su creación externamente
     
     const results: ProcessResult[] = [];
     const knownAccountNames = uniqueAccountNames.filter(name => clients.some(c => c.metaAccountName === name));
