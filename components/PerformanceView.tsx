@@ -10,6 +10,7 @@ import { VideoUploadModal } from './VideoUploadModal';
 import db from '../database';
 import Logger from '../Logger';
 import { MetricsDetailModal } from './MetricsDetailModal';
+import { DataSourceSwitch } from './DataSourceSwitch';
 
 type FilterMode = 'all' | 'image' | 'video';
 type DisplayMode = 'table' | 'cards';
@@ -114,6 +115,12 @@ export const PerformanceView: React.FC<PerformanceViewProps> = ({ clients, getPe
     const [filterMode, setFilterMode] = useState<FilterMode>('all');
     const [displayMode, setDisplayMode] = useState<DisplayMode>('cards');
     const [selectedClient, setSelectedClient] = useState<Client | null>(null);
+
+    useEffect(() => {
+        if (selectedClient && !safeClients.some(c => c.id === selectedClient.id)) {
+            setSelectedClient(null);
+        }
+    }, [safeClients, selectedClient]);
     const [bulkAnalysisState, setBulkAnalysisState] = useState({ active: false, current: 0, total: 0 });
     const [accountAverages, setAccountAverages] = useState<AccountAverages | null>(null);
 
@@ -513,7 +520,10 @@ export const PerformanceView: React.FC<PerformanceViewProps> = ({ clients, getPe
                             <h2 className="text-2xl font-bold text-brand-text">Rendimiento por Cliente</h2>
                             <p className="text-brand-text-secondary mt-1">Gestiona el rendimiento de las campañas publicitarias.</p>
                         </div>
-                        <DateRangePicker onDateChange={onDateChange} startDate={startDate} endDate={endDate} />
+                        <div className="flex items-center gap-4">
+                            <DataSourceSwitch />
+                            <DateRangePicker onDateChange={onDateChange} startDate={startDate} endDate={endDate} />
+                        </div>
                     </header>
 
                     <div className="bg-blue-900/20 border border-blue-500 rounded-lg p-8 text-center">
@@ -541,7 +551,10 @@ export const PerformanceView: React.FC<PerformanceViewProps> = ({ clients, getPe
                         <h2 className="text-2xl font-bold text-brand-text">Rendimiento por Cliente</h2>
                         <p className="text-brand-text-secondary mt-1">Selecciona un cliente para ver el detalle de sus anuncios.</p>
                     </div>
-                    <DateRangePicker onDateChange={onDateChange} startDate={startDate} endDate={endDate} />
+                    <div className="flex items-center gap-4">
+                        <DataSourceSwitch />
+                        <DateRangePicker onDateChange={onDateChange} startDate={startDate} endDate={endDate} />
+                    </div>
                 </header>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -576,7 +589,7 @@ export const PerformanceView: React.FC<PerformanceViewProps> = ({ clients, getPe
                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd" /></svg>
                         Volver a la lista de clientes
                     </button>
-                     <div className="flex flex-col md:flex-row justify-between md:items-center gap-4">
+                    <div className="flex flex-col md:flex-row justify-between md:items-center gap-4">
                         <div className="flex items-center gap-4">
                             <img src={selectedClient.logo} alt={selectedClient.name} className="h-12 w-12 rounded-full bg-brand-border" />
                             <div>
@@ -584,7 +597,10 @@ export const PerformanceView: React.FC<PerformanceViewProps> = ({ clients, getPe
                                 <p className="text-brand-text-secondary">Datos del {new Date(startDate).toLocaleDateString('es-ES')} al {new Date(endDate).toLocaleDateString('es-ES')}</p>
                             </div>
                         </div>
-                         <DateRangePicker onDateChange={onDateChange} startDate={startDate} endDate={endDate} />
+                        <div className="flex items-center gap-4">
+                            <DataSourceSwitch />
+                            <DateRangePicker onDateChange={onDateChange} startDate={startDate} endDate={endDate} />
+                        </div>
                     </div>
                 </header>
 
