@@ -1,4 +1,28 @@
 export const TABLES = {
+  clients: {
+    create: `
+        CREATE TABLE clients (
+            id INT IDENTITY(1,1) PRIMARY KEY,
+            name NVARCHAR(255) NOT NULL,
+            name_norm NVARCHAR(255) NOT NULL UNIQUE,
+            created_at DATETIME DEFAULT GETDATE()
+        )
+    `,
+    dependencies: []
+  },
+  facts_meta: {
+    create: `
+        CREATE TABLE facts_meta (
+            client_id INT NOT NULL,
+            [date] DATE NOT NULL,
+            ad_id NVARCHAR(255) NOT NULL,
+            spend DECIMAL(18,2),
+            days_detected INT DEFAULT 0,
+            PRIMARY KEY (client_id, [date], ad_id)
+        )
+    `,
+    dependencies: ['clients']
+  },
   clientes: {
     create: `
         CREATE TABLE clientes (

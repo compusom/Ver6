@@ -116,6 +116,8 @@ export interface User {
 export interface Client {
   id: string;
   name: string;
+  /** Normalized name for uniqueness checks */
+  nameNorm?: string;
   logo: string;
   currency: string;
   userId: string;
