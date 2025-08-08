@@ -27,6 +27,8 @@ interface ImportViewProps {
     onSyncFromMeta: (clientId: string) => Promise<void>;
     metaApiConfig: MetaApiConfig | null;
     currentUser: User;
+    refreshClients: () => Promise<void>;
+    refreshPerformance: () => Promise<void>;
 }
 
 type Feedback = { type: 'info' | 'success' | 'error', message: string };
@@ -60,7 +62,7 @@ const ImportCard: React.FC<{
 export const ImportView: React.FC<ImportViewProps> = ({
     clients, setClients, lookerData, setLookerData,
     performanceData, setPerformanceData, bitacoraReports, setBitacoraReports,
-    onSyncFromMeta, metaApiConfig, currentUser
+    onSyncFromMeta, metaApiConfig, currentUser, refreshClients, refreshPerformance
 }) => {
 
     // Validación defensiva para props
@@ -150,6 +152,8 @@ export const ImportView: React.FC<ImportViewProps> = ({
             addLog('Importación completada correctamente');
             setFeedback({ type: 'success', message: `Importación a SQL exitosa: ${result.message || 'OK'}` });
             await loadSqlHistory();
+            await refreshClients();
+            await refreshPerformance();
         } catch (error) {
             const message = error instanceof Error ? error.message : 'Error inesperado.';
             addLog(`Error: ${message}`);
@@ -273,6 +277,9 @@ export const ImportView: React.FC<ImportViewProps> = ({
             }
         }
         await db.saveProcessedHashes(newHashes);
+
+        await refreshClients();
+        await refreshPerformance();
     };
 
     const processAndSaveLookerData = async (file: File, clientList: Client[]) => {
@@ -320,6 +327,9 @@ export const ImportView: React.FC<ImportViewProps> = ({
             }
         }
         await db.saveProcessedHashes(newHashes);
+
+        await refreshClients();
+        await refreshPerformance();
     };
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>, source: 'looker' | 'meta' | 'txt') => {

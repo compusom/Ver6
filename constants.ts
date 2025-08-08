@@ -1,6 +1,9 @@
 
 import { Placement, PlacementId, FormatGroup, UiType } from './types';
 
+export enum DataSource { LOCAL = 'local', SQL = 'sql' }
+export const DATA_SOURCE_STORAGE_KEY = 'app:dataSource';
+
 export const META_ADS_GUIDELINES = `
 ### Mejoras automáticas de Meta Advantage+ para anuncios estáticos y de video
 

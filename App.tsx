@@ -23,6 +23,8 @@ import { syncFromMetaAPI } from './lib/metaApiConnector';
 import { processPerformanceData } from './lib/dataProcessor';
 import { CreativeAnalysisView } from './components/CreativeAnalysisView';
 import { DataDiagnosticsModal } from './components/DataDiagnosticsModal';
+import { getClients, getPerformance } from './lib/dataRouter';
+import { useDataSource } from './context/DataSourceContext';
 
 const fileToGenerativePart = async (file: File) => {
     const base64EncodedDataPromise = new Promise<string>((resolve, reject) => {
@@ -278,6 +280,7 @@ const parseNumber = (value: any): number => {
 
 const App: React.FC = () => {
     // App State
+    const { dataSource } = useDataSource();
     const [isLoggedIn, setIsLoggedIn] = useState(false);
     const [currentUser, setCurrentUser] = useState<User | null>(null);
     const [mainView, setMainView] = useState<AppView>('performance');
@@ -293,6 +296,24 @@ const App: React.FC = () => {
     const [uploadedVideos, setUploadedVideos] = useState<UploadedVideo[]>([]);
     const [importHistory, setImportHistory] = useState<ImportBatch[]>([]);
     const [performanceData, setPerformanceData] = useState<{ [key: string]: PerformanceRecord[] }>({});
+
+    const refreshClients = useCallback(async () => {
+        const loaded = await getClients(dataSource);
+        setClients(loaded);
+    }, [dataSource]);
+
+    const refreshPerformance = useCallback(async () => {
+        const loaded = await getPerformance(dataSource);
+        setPerformanceData(loaded);
+    }, [dataSource]);
+
+    useEffect(() => {
+        const refresh = async () => {
+            await refreshClients();
+            await refreshPerformance();
+        };
+        refresh();
+    }, [dataSource, refreshClients, refreshPerformance]);
 
     // Shared State for Date Range
     const today = new Date();
@@ -1047,7 +1068,7 @@ Responde ÚNICAMENTE en formato JSON estructurado según el esquema proporcionad
                         {mainView === 'settings' && <SettingsView metaApiConfig={metaApiConfig} setMetaApiConfig={setMetaApiConfig} />}
                         {mainView === 'control_panel' && currentUser?.role === 'admin' && <ControlPanelView />}
                         {mainView === 'clients' && <ClientManager clients={clients} setClients={setClients} currentUser={currentUser!} />}
-                        {mainView === 'import' && currentUser?.role === 'admin' && <ImportView clients={clients} setClients={setClients} lookerData={lookerData} setLookerData={setLookerData} performanceData={performanceData} setPerformanceData={setPerformanceData} bitacoraReports={bitacoraReports} setBitacoraReports={setBitacoraReports} onSyncFromMeta={handleSyncFromMeta} metaApiConfig={metaApiConfig} currentUser={currentUser} />}
+{mainView === 'import' && currentUser?.role === 'admin' && <ImportView clients={clients} setClients={setClients} lookerData={lookerData} setLookerData={setLookerData} performanceData={performanceData} setPerformanceData={setPerformanceData} bitacoraReports={bitacoraReports} setBitacoraReports={setBitacoraReports} onSyncFromMeta={handleSyncFromMeta} metaApiConfig={metaApiConfig} currentUser={currentUser} refreshClients={refreshClients} refreshPerformance={refreshPerformance} />}
                         {mainView === 'users' && currentUser?.role === 'admin' && <UserManager users={users} setUsers={setUsers} currentUser={currentUser!} />}
                         {mainView === 'help' && <HelpView />}
                         {mainView === 'logs' && currentUser?.role === 'admin' && <LogView />}

@@ -5,6 +5,7 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import './index.css'; // Our new CSS file
 import { NotificationProvider } from './components/NotificationProvider';
+import { DataSourceProvider } from './context/DataSourceContext';
 // import MinimalApp from './MinimalApp';
 
 const rootElement = document.getElementById('root');
@@ -16,7 +17,9 @@ const root = ReactDOM.createRoot(rootElement);
 root.render(
   <React.StrictMode>
     <NotificationProvider>
-      <App />
+      <DataSourceProvider>
+        <App />
+      </DataSourceProvider>
     </NotificationProvider>
   </React.StrictMode>
 );
