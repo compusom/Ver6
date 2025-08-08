@@ -140,6 +140,16 @@ export const TABLES = {
         )
     `,
     dependencies: ['clientes']
+  },
+  import_history: {
+    create: `
+        CREATE TABLE import_history (
+            id INT IDENTITY(1,1) PRIMARY KEY,
+            batch_data NVARCHAR(MAX) NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    `,
+    dependencies: []
   }
 };
 

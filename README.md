@@ -27,3 +27,13 @@ Este repositorio contiene todo lo necesario para ejecutar la app localmente.
 2. Configura la variable `GEMINI_API_KEY` en [.env.local](.env.local) con tu API key de Gemini
 3. Inicia el sistema:
    `npm run start` (esto ejecuta frontend y backend juntos)
+
+## Número de compilación
+
+El número de compilación del sistema se mantiene en [`build-info.ts`](build-info.ts).
+Debe incrementarse manualmente en cada cambio que modifique el código y es visible en toda la aplicación.
+Para actualizarlo:
+
+1. Edita `build-info.ts` y aumenta `BUILD_NUMBER` en 1.
+2. Asegúrate de commitear este cambio junto con tus modificaciones.
+
