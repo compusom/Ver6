@@ -575,7 +575,8 @@ app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
         const transaction = new sql.Transaction(sqlPool);
         await transaction.begin();
         try {
-            const allParams = ['id_reporte', 'unique_id', ...METRIC_COLUMNS];
+            const metricCols = METRIC_COLUMNS.filter(c => c !== 'unique_id');
+            const allParams = ['id_reporte', 'unique_id', ...metricCols];
             const insertPS = new sql.PreparedStatement(transaction);
             allParams.forEach(col => {
                 if (col === 'id_reporte') insertPS.input(col, sql.Int);
@@ -589,7 +590,7 @@ app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
                     .join(', ')})`
             );
 
-            const updateCols = ['id_reporte', ...METRIC_COLUMNS];
+            const updateCols = ['id_reporte', ...metricCols];
             const updatePS = new sql.PreparedStatement(transaction);
             updatePS.input('unique_id', sql.NVarChar(255));
             updateCols.forEach(col => {
