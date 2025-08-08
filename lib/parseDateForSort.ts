@@ -1,4 +1,4 @@
-export function parseDateForSort(value) {
+export function parseDateForSort(value: unknown): Date | null {
     if (value === null || value === undefined) return null;
     if (typeof value === 'number') {
         // Excel serial number (days since 1899-12-30)

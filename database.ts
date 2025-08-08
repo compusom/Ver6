@@ -3,6 +3,7 @@ import { indexedDBManager } from './lib/indexedDBManager';
 import { localServerClient } from './lib/localServerClient';
 import { notify } from './components/notificationService';
 import Logger from './Logger';
+import { CRITICAL_TABLES } from './database/constants';
 
 /**
  * Pure IndexedDB Database Manager - Ver6 Sistema Híbrido
@@ -97,8 +98,7 @@ const db = {
         Logger.info(`[DB] Executing: SELECT * FROM ${table}`);
         
         // Critical authentication data from localStorage ONLY
-        const criticalTables = ['users', 'logged_in_user', 'config'];
-        if (criticalTables.includes(table)) {
+        if (CRITICAL_TABLES.includes(table)) {
             try {
                 const localData = localStorage.getItem(`db_${table}`);
                 if (localData) {
@@ -187,8 +187,7 @@ const db = {
         Logger.info(`[DB] Data size: ${JSON.stringify(data).length} characters`);
 
         // Critical authentication data stays in localStorage for immediate access
-        const criticalTables = ['users', 'logged_in_user', 'config'];
-        if (criticalTables.includes(table)) {
+        if (CRITICAL_TABLES.includes(table)) {
             try {
                 const dataString = JSON.stringify(data);
                 localStorage.setItem(`db_${table}`, dataString);
