@@ -23,11 +23,11 @@ export async function importLookerReport(data: ArrayBuffer, db: MetaDb): Promise
 
   const staging: LookerUrlRow[] = [];
   const unmatched: { account: string; id: string }[] = [];
-  const clientNames: Record<number, string> = {};
+  const clientNames: Record<string, string> = {};
 
   for (const r of rows) {
     const rawAccount = r['account_name'] || r['Account name'] || r['nombre de la cuenta'] || '';
-    const client = await db.getClientByNameNorm(normalizeName(String(rawAccount)));
+    const client = await db.findClientByNameNorm(normalizeName(String(rawAccount)));
     const adId = r['ad_id'] || r['Ad ID'] || r['ad id'];
     const adName = r['ad_name'] || r['Ad name'] || r['nombre del anuncio'];
     const adNameNorm = adName ? normalizeName(String(adName)) : undefined;
@@ -39,9 +39,9 @@ export async function importLookerReport(data: ArrayBuffer, db: MetaDb): Promise
       unmatched.push({ account: String(rawAccount), id: identifier });
       continue;
     }
-    clientNames[Number(client.id)] = client.name;
+    clientNames[client.id] = client.name;
     staging.push({
-      clientId: Number(client.id),
+      clientId: client.id,
       adId: adId ? String(adId) : undefined,
       adNameNorm,
       adPreviewLink: preview,

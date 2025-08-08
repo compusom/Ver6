@@ -21,7 +21,7 @@ export async function importMetaReport(data: ArrayBuffer, db: MetaDb) {
   const first = rows[0];
   const rawName = first['account_name'] || first['Account name'] || first['nombre de la cuenta'] || '';
   const nameNorm = normalizeName(String(rawName));
-  let client = await db.getClientByNameNorm(nameNorm);
+  let client = await db.findClientByNameNorm(nameNorm);
   if (!client) {
     const rl = createInterface({ input, output });
     const answer = (await rl.question(`Client "${rawName}" not found. Create? (y/N): `)).trim().toLowerCase();
@@ -31,8 +31,8 @@ export async function importMetaReport(data: ArrayBuffer, db: MetaDb) {
       return { total: 0, inserted: 0, updated: 0, skipped: rows.length };
     }
     client = { id: '', name: String(rawName), nameNorm, logo: '', currency: '', userId: '' };
-    const id = await db.upsertClient(client);
-    client.id = String(id);
+    const id = await db.createClient({ name: client.name, nameNorm });
+    client.id = id;
     Logger.info(`[importMetaReport] Created client ${client.name} (${id})`);
   }
 
@@ -48,7 +48,7 @@ export async function importMetaReport(data: ArrayBuffer, db: MetaDb) {
       continue;
     }
     const row: MetaMetricRow = {
-      clientId: Number(client.id),
+      clientId: client.id,
       date: new Date(date).toISOString().slice(0, 10),
       adId: String(adId),
       spend: r['spend'] || r['amount_spent (eur)'] || r['importe gastado (eur)'],
@@ -57,7 +57,7 @@ export async function importMetaReport(data: ArrayBuffer, db: MetaDb) {
     metricRows.push(row);
     if (adName) {
       const adRow: MetaAdRow = {
-        clientId: Number(client.id),
+        clientId: client.id,
         adId: String(adId),
         name: String(adName),
         nameNorm: normalizeName(String(adName)),
