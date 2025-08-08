@@ -499,220 +499,124 @@ app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
     if (!req.file) {
         return res.status(400).json({ success: false, error: 'No file uploaded' });
     }
-
     const confirmCreate = req.query.confirmCreate === '1';
-    logger.info(`[SQL] Importing Excel file from ${req.file.path}`);
     try {
         const fileBuffer = fs.readFileSync(req.file.path);
         const workbook = xlsx.read(fileBuffer, { type: 'buffer' });
         const sheet = workbook.Sheets[workbook.SheetNames[0]];
-
-        // Detect and skip title rows like "Raw Data Report"
-        let startRow = 0;
-        const firstCell = sheet['A1']?.v;
-        if (typeof firstCell === 'string' && firstCell.toLowerCase().includes('raw data report')) {
-            startRow = 1;
-        }
-        const rows = xlsx.utils.sheet_to_json(sheet, { defval: null, range: startRow });
-
+        const rows = xlsx.utils.sheet_to_json(sheet, { defval: null });
         if (rows.length === 0) {
             return res.status(400).json({ success: false, error: 'Excel file is empty' });
         }
-
-        // Extraer y normalizar nombre de cliente
-        const firstRow = rows[0];
-        const accountName = firstRow['nombre_de_la_cuenta'] || firstRow['Nombre de la cuenta'] || firstRow['Account name'] || 'desconocido';
+        const first = rows[0];
+        const accountName = first['account_name'] || first['Account name'] || first['nombre_de_la_cuenta'] || first['Nombre de la cuenta'] || 'desconocido';
         const nameNorm = normalizeName(accountName);
-
-        // Buscar cliente por nameNorm
-        let result = await sqlPool
+        logger.info(`[SQL] Import META account="${accountName}" norm="${nameNorm}" confirm=${confirmCreate}`);
+        let queryResult = await sqlPool
             .request()
             .input('name_norm', sql.NVarChar(255), nameNorm)
-            .query('SELECT client_id, name, name_norm FROM clients WHERE name_norm = @name_norm');
+            .query('SELECT TOP 1 client_id FROM dbo.clients WHERE name_norm = @name_norm');
         let clientId;
-        if (result.recordset.length === 0) {
+        if (queryResult.recordset.length === 0) {
             if (!confirmCreate) {
-                // Responder 409 para pedir confirmación
+                logger.info(`[SQL] Cliente no encontrado: ${nameNorm}, solicitando confirmación`);
                 return res.status(409).json({ needsConfirmation: true, accountName, nameNorm });
             }
-            // Crear cliente con MERGE
-            let mergeResult = await sqlPool
+            const createRes = await sqlPool
                 .request()
                 .input('name', sql.NVarChar(255), accountName)
                 .input('name_norm', sql.NVarChar(255), nameNorm)
-                .query(`MERGE dbo.clients AS T
+                .query(`DECLARE @out TABLE(client_id UNIQUEIDENTIFIER, name NVARCHAR(255), name_norm NVARCHAR(255), created_at DATETIME2);
+MERGE dbo.clients AS T
 USING (SELECT @name_norm AS name_norm, @name AS name) AS S
 ON T.name_norm = S.name_norm
 WHEN MATCHED THEN UPDATE SET name = S.name
-WHEN NOT MATCHED THEN INSERT (client_id, name, name_norm) VALUES (NEWID(), S.name, S.name_norm)
-OUTPUT inserted.client_id, inserted.name, inserted.name_norm, inserted.created_at;`);
-            clientId = mergeResult.recordset[0].client_id;
-            logger.info(`[SQL] Cliente creado por confirmación: ${accountName} (${nameNorm})`);
+WHEN NOT MATCHED THEN
+  INSERT (client_id, name, name_norm) VALUES (NEWID(), S.name, S.name_norm)
+OUTPUT inserted.client_id, inserted.name, inserted.name_norm, inserted.created_at INTO @out;
+SELECT client_id FROM @out;`);
+            clientId = createRes.recordset[0].client_id;
+            logger.info(`[SQL] Cliente creado: ${accountName} (${clientId})`);
         } else {
-            clientId = result.recordset[0].client_id;
+            clientId = queryResult.recordset[0].client_id;
         }
-
-        const uniqueDays = new Set();
-        const records = [];
-        const fileUniqueIds = new Set();
-
-        for (const row of rows) {
-            const normalized = {};
-            const original = {};
-            for (const [k, v] of Object.entries(row)) {
-                const nk = normalizeKey(k);
-                original[nk] = v;
-                const colName = METRIC_COLUMN_MAP.get(nk);
-                if (colName) {
-                    if (NUMERIC_COLUMNS.has(colName)) {
-                        normalized[colName] = parseNumber(v);
-                    } else if (DATE_COLUMNS.has(colName)) {
-                        const d = parseDateForSort(v);
-                        normalized[colName] = d ? new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())) : null;
-                    } else {
-                        normalized[colName] = v;
-                    }
-                }
-            }
-            const uniqueId = `${original.dia || original.day}_${
-                original.nombre_de_la_campana || original.campaign_name || ''
-            }_${
-                original.nombre_del_anuncio || original.ad_name || ''
-            }_${original.edad || original.age || ''}_${original.sexo || original.gender || ''}`;
-            if (!uniqueId || fileUniqueIds.has(uniqueId)) {
-                continue;
-            }
-            fileUniqueIds.add(uniqueId);
-            normalized.unique_id = uniqueId;
-            records.push(normalized);
-            const dayValue = original.dia || original.day;
-            if (dayValue) uniqueDays.add(dayValue);
+        const facts = [];
+        for (const r of rows) {
+            const d = parseDateForSort(r['date'] || r['day'] || r['día']);
+            if (!d) continue;
+            const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())).toISOString().split('T')[0];
+            facts.push({
+                client_id: clientId,
+                date,
+                ad_id: r['ad_id'] || null,
+                campaign_id: r['campaign_id'] || r['campaign id'] || null,
+                adset_id: r['adset_id'] || r['adset id'] || null,
+                impressions: r['impressions'] ?? null,
+                clicks: r['clicks'] ?? null,
+                spend: parseNumber(r['spend'] ?? r['amount_spent (eur)'] ?? null),
+                purchases: r['purchases'] ?? null,
+                roas: r['roas'] ?? null,
+            });
         }
-
-        const parsedDates = Array.from(uniqueDays)
-            .map(parseDateForSort)
-            .filter(d => d !== null);
-        const periodStart =
-            parsedDates.length > 0
-                ? new Date(Math.min(...parsedDates.map(d => d.getTime())))
-                      .toISOString()
-                      .split('T')[0]
-                : null;
-        const periodEnd =
-            parsedDates.length > 0
-                ? new Date(Math.max(...parsedDates.map(d => d.getTime())))
-                      .toISOString()
-                      .split('T')[0]
-                : null;
-        const daysDetected = uniqueDays.size;
-
-        // Create or reuse report record
-        const fileHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
-
-        // Check if this file was already imported
-        const existingReport = await sqlPool
-            .request()
-            .input('hash_archivo', sql.Char(64), fileHash)
-            .query('SELECT id_reporte FROM archivos_reporte WHERE hash_archivo = @hash_archivo');
-
-        if (existingReport.recordset.length > 0) {
-            return res.status(400).json({ success: false, error: 'Este archivo ya fue importado anteriormente' });
+        const table = new sql.Table('#in_facts');
+        table.create = true;
+        table.columns.add('client_id', sql.UniqueIdentifier, { nullable: false });
+        table.columns.add('date', sql.Date, { nullable: false });
+        table.columns.add('ad_id', sql.NVarChar(100), { nullable: true });
+        table.columns.add('campaign_id', sql.NVarChar(100), { nullable: true });
+        table.columns.add('adset_id', sql.NVarChar(100), { nullable: true });
+        table.columns.add('impressions', sql.BigInt, { nullable: true });
+        table.columns.add('clicks', sql.BigInt, { nullable: true });
+        table.columns.add('spend', sql.Decimal(18,4), { nullable: true });
+        table.columns.add('purchases', sql.Int, { nullable: true });
+        table.columns.add('roas', sql.Decimal(18,4), { nullable: true });
+        for (const f of facts) {
+            table.rows.add(f.client_id, f.date, f.ad_id ?? null, f.campaign_id ?? null, f.adset_id ?? null, f.impressions ?? null, f.clicks ?? null, f.spend ?? null, f.purchases ?? null, f.roas ?? null);
         }
-
-        const report = await sqlPool
-            .request()
-            .input('id_cliente', sql.Int, clientId)
-            .input('nombre_archivo', sql.VarChar(255), req.file.originalname)
-            .input('hash_archivo', sql.Char(64), fileHash)
-            .input('period_start', sql.Date, periodStart)
-            .input('period_end', sql.Date, periodEnd)
-            .input('days_detected', sql.Int, daysDetected)
-            .query(
-                'INSERT INTO archivos_reporte (id_cliente, nombre_archivo, hash_archivo, period_start, period_end, days_detected) OUTPUT INSERTED.id_reporte VALUES (@id_cliente, @nombre_archivo, @hash_archivo, @period_start, @period_end, @days_detected)'
-            );
-        const reportId = report.recordset[0].id_reporte;
-
-        let inserted = 0;
-        let updated = 0;
-        let skipped = rows.length - records.length;
-
         const transaction = new sql.Transaction(sqlPool);
         await transaction.begin();
         try {
-            const metricCols = METRIC_COLUMNS.filter(c => c !== 'unique_id');
-            const allParams = ['id_reporte', 'unique_id', ...metricCols];
+            const reqBulk = new sql.Request(transaction);
+            await reqBulk.bulk(table);
+            const mergeRes = await reqBulk.query(`IF OBJECT_ID('tempdb..#actions') IS NOT NULL DROP TABLE #actions;
+CREATE TABLE #actions(action NVARCHAR(10));
+MERGE dbo.facts_meta AS T
+USING #in_facts AS S
+ON (T.client_id = S.client_id AND T.[date] = S.[date] AND ISNULL(T.ad_id,'') = ISNULL(S.ad_id,''))
+WHEN MATCHED THEN
+  UPDATE SET
+    campaign_id = S.campaign_id,
+    adset_id    = S.adset_id,
+    impressions = S.impressions,
+    clicks      = S.clicks,
+    spend       = S.spend,
+    purchases   = S.purchases,
+    roas        = S.roas
+WHEN NOT MATCHED THEN
+  INSERT (client_id,[date],ad_id,campaign_id,adset_id,impressions,clicks,spend,purchases,roas)
+  VALUES (S.client_id,S.[date],S.ad_id,S.campaign_id,S.adset_id,S.impressions,S.clicks,S.spend,S.purchases,S.roas)
+OUTPUT $action INTO #actions;
 
-            // Create a safe parameter name (ASCII only) for each column/param
-            const toParam = (col) => 'p_' + normalizeKey(col);
-
-            const updateCols = metricCols; // exclude id_reporte from SET
-
-            for (const rec of records) {
-                rec.id_reporte = reportId;
-
-                // First attempt an update within the same report
-                const updateReq = transaction.request();
-                updateReq.input(toParam('unique_id'), MSSQL_TYPE_MAP.get('unique_id') || sql.VarChar(255), rec.unique_id);
-                updateReq.input(toParam('id_reporte'), sql.Int, reportId);
-                updateCols.forEach(col => {
-                    const type = MSSQL_TYPE_MAP.get(col) || sql.VarChar(sql.MAX);
-                    updateReq.input(toParam(col), type, rec[col] ?? null);
-                });
-                const updateResult = await updateReq.query(
-                    `UPDATE metricas SET ${updateCols
-                        .map(c => `[${c}] = @${toParam(c)}`)
-                        .join(', ')} WHERE unique_id = @${toParam('unique_id')} AND id_reporte = @${toParam('id_reporte')}`
-                );
-
-                if (updateResult.rowsAffected[0] > 0) {
-                    updated++;
-                    continue;
-                }
-
-                // If no rows updated, insert new record
-                const insertReq = transaction.request();
-                allParams.forEach(col => {
-                    const type = MSSQL_TYPE_MAP.get(col) || sql.VarChar(sql.MAX);
-                    const paramType = col === 'id_reporte' ? sql.Int : type;
-                    insertReq.input(toParam(col), paramType, rec[col] ?? null);
-                });
-                await insertReq.query(
-                    `INSERT INTO metricas (${allParams.map(c => `[${c}]`).join(', ')}) VALUES (${allParams
-                        .map(c => `@${toParam(c)}`)
-                        .join(', ')})`
-                );
-                inserted++;
-            }
-
+SELECT
+  SUM(CASE WHEN action='INSERT' THEN 1 ELSE 0 END) AS inserted,
+  SUM(CASE WHEN action='UPDATE' THEN 1 ELSE 0 END) AS updated
+FROM #actions;`);
             await transaction.commit();
+            const inserted = mergeRes.recordset[0].inserted || 0;
+            const updated = mergeRes.recordset[0].updated || 0;
+            const total = inserted + updated;
+            logger.info(`[SQL] Import summary account="${accountName}" norm="${nameNorm}" inserted=${inserted} updated=${updated} total=${total}`);
+            await sqlPool
+                .request()
+                .input('batch_data', sql.NVarChar(sql.MAX), JSON.stringify({ id: crypto.randomUUID(), timestamp: new Date().toISOString(), source: 'sql', fileName: req.file.originalname, accountName, nameNorm, summary: { inserted, updated, total } }))
+                .query('INSERT INTO import_history (batch_data) VALUES (@batch_data)');
+            res.json({ inserted, updated, total });
         } catch (err) {
-            await transaction.rollback().catch(rbErr => {
-                logger.error('[SQL] Rollback failed:', rbErr);
-            });
+            await transaction.rollback();
             throw err;
         }
-
-        const history = {
-            id: crypto.randomUUID(),
-            timestamp: new Date().toISOString(),
-            source: 'sql',
-            fileName: req.file.originalname,
-            fileHash,
-            clientName,
-            description: `${inserted} insertados, ${updated} actualizados, ${skipped} omitidos`,
-            undoData: { type: 'sql', keys: [], clientId: String(clientId) },
-            periodStart,
-            periodEnd,
-            daysDetected
-        };
-        await sqlPool
-            .request()
-            .input('batch_data', sql.NVarChar(sql.MAX), JSON.stringify(history))
-            .query('INSERT INTO import_history (batch_data) VALUES (@batch_data)');
-
-        res.json({ success: true, inserted, updated, skipped, clientName, periodStart, periodEnd });
     } catch (error) {
-        logger.error('[SQL] Error importing Excel:', error.stack || error.message);
+        logger.error('[SQL] Error importing Excel:', error);
         res.status(500).json({ success: false, error: error.message });
     } finally {
         fs.unlink(req.file.path, () => {});

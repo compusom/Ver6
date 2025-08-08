@@ -1,17 +1,25 @@
 import { Client } from '../types.js';
 import normalizeName from '../lib/normalizeName.js';
+import crypto from 'crypto';
+import sql from 'mssql';
 
 export interface MetaMetricRow {
-  clientId: number;
+  clientId: string;
   date: string;
-  adId: string;
-  spend?: number;
+  adId: string | null;
+  campaignId?: string | null;
+  adsetId?: string | null;
+  impressions?: number | null;
+  clicks?: number | null;
+  spend?: number | null;
+  purchases?: number | null;
+  roas?: number | null;
   days_detected?: number;
   [key: string]: any;
 }
 
 export interface MetaAdRow {
-  clientId: number;
+  clientId: string;
   adId: string;
   name: string;
   nameNorm: string;
@@ -20,7 +28,7 @@ export interface MetaAdRow {
 }
 
 export interface LookerUrlRow {
-  clientId: number;
+  clientId: string;
   adId?: string;
   adNameNorm?: string;
   adPreviewLink?: string;
@@ -28,8 +36,8 @@ export interface LookerUrlRow {
 }
 
 export interface MetaDb {
-  getClientByNameNorm(nameNorm: string): Promise<Client | undefined>;
-  upsertClient(client: Client): Promise<number>;
+  findClientByNameNorm(nameNorm: string): Promise<Client | undefined>;
+  createClient(client: { name: string; nameNorm: string }): Promise<string>;
   upsertAds(rows: MetaAdRow[]): Promise<{ inserted: number; updated: number }>;
   upsertMetaMetrics(rows: MetaMetricRow[]): Promise<{ inserted: number; updated: number }>;
   updateAdUrls(rows: LookerUrlRow[]): Promise<{ updated: number; unmatched: LookerUrlRow[] }>;
@@ -47,25 +55,24 @@ class MetaDbLocal implements MetaDb {
   private metrics: Map<string, any> = new Map();
   private ads: Map<string, MetaAdRow> = new Map();
 
-  async getClientByNameNorm(nameNorm: string): Promise<Client | undefined> {
+  async findClientByNameNorm(nameNorm: string): Promise<Client | undefined> {
     for (const c of this.clients.values()) {
       if (c.nameNorm === nameNorm) return c;
     }
     return undefined;
   }
 
-  async upsertClient(client: Client): Promise<number> {
-    const nameNorm = client.nameNorm || normalizeName(client.name);
-    let existing = await this.getClientByNameNorm(nameNorm);
+  async createClient(client: { name: string; nameNorm: string }): Promise<string> {
+    const existing = await this.findClientByNameNorm(client.nameNorm);
     if (existing) {
-      const merged = { ...existing, ...client, nameNorm };
-      this.clients.set(existing.id, merged);
-      return Number(existing.id);
+      existing.name = client.name;
+      this.clients.set(existing.id, existing);
+      return existing.id;
     }
-    const id = String(this.clients.size + 1);
-    const newClient: Client = { ...client, id, nameNorm };
+    const id = crypto.randomUUID();
+    const newClient: Client = { id, name: client.name, nameNorm: client.nameNorm, logo: '', currency: '', userId: '' };
     this.clients.set(id, newClient);
-    return Number(id);
+    return id;
   }
 
   async upsertAds(rows: MetaAdRow[]): Promise<{ inserted: number; updated: number }> {
@@ -129,8 +136,6 @@ class MetaDbLocal implements MetaDb {
   }
 }
 
-import sql from 'mssql';
-
 class MetaDbSql implements MetaDb {
   private pool: Promise<sql.ConnectionPool>;
   constructor() {
@@ -148,30 +153,33 @@ class MetaDbSql implements MetaDb {
     return this.pool;
   }
 
-  async getClientByNameNorm(nameNorm: string): Promise<Client | undefined> {
+  async findClientByNameNorm(nameNorm: string): Promise<Client | undefined> {
     const pool = await this.ensurePool();
     const result = await pool
       .request()
-      .input('nameNorm', sql.NVarChar, nameNorm)
-      .query('SELECT TOP 1 id, name, name_norm FROM clients WHERE name_norm = @nameNorm');
+      .input('name_norm', sql.NVarChar(255), nameNorm)
+      .query('SELECT TOP 1 client_id, name, name_norm FROM clients WHERE name_norm = @name_norm');
     const row = result.recordset[0];
-    return row ? { id: String(row.id), name: row.name, nameNorm: row.name_norm, logo: '', currency: '', userId: '' } : undefined;
+    return row ? { id: String(row.client_id), name: row.name, nameNorm: row.name_norm, logo: '', currency: '', userId: '' } : undefined;
   }
 
-  async upsertClient(client: Client): Promise<number> {
+  async createClient(client: { name: string; nameNorm: string }): Promise<string> {
     const pool = await this.ensurePool();
-    const nameNorm = client.nameNorm || normalizeName(client.name);
     const result = await pool
       .request()
-      .input('name', sql.NVarChar, client.name)
-      .input('nameNorm', sql.NVarChar, nameNorm)
-      .query(`MERGE clients AS target
-ON target.name_norm = @nameNorm
-WHEN MATCHED THEN UPDATE SET name = @name
-WHEN NOT MATCHED THEN INSERT (name, name_norm) VALUES (@name, @nameNorm)
-OUTPUT inserted.id;`);
-    const id = result.recordset[0]?.id;
-    return Number(id);
+      .input('name', sql.NVarChar(255), client.name)
+      .input('name_norm', sql.NVarChar(255), client.nameNorm)
+      .query(`DECLARE @out TABLE(client_id UNIQUEIDENTIFIER, name NVARCHAR(255), name_norm NVARCHAR(255), created_at DATETIME2);
+MERGE dbo.clients AS T
+USING (SELECT @name_norm AS name_norm, @name AS name) AS S
+ON T.name_norm = S.name_norm
+WHEN MATCHED THEN UPDATE SET name = S.name
+WHEN NOT MATCHED THEN
+  INSERT (client_id, name, name_norm) VALUES (NEWID(), S.name, S.name_norm)
+OUTPUT inserted.client_id, inserted.name, inserted.name_norm, inserted.created_at INTO @out;
+SELECT client_id, name, name_norm, created_at FROM @out;`);
+    const row = result.recordset[0];
+    return String(row.client_id);
   }
 
   async upsertAds(rows: MetaAdRow[]): Promise<{ inserted: number; updated: number }> {
@@ -181,10 +189,10 @@ OUTPUT inserted.id;`);
     for (const row of rows) {
       const request = pool
         .request()
-        .input('clientId', sql.Int, row.clientId)
-        .input('adId', sql.NVarChar, row.adId)
-        .input('name', sql.NVarChar, row.name)
-        .input('nameNorm', sql.NVarChar, row.nameNorm);
+        .input('clientId', sql.UniqueIdentifier, row.clientId)
+        .input('adId', sql.NVarChar(255), row.adId)
+        .input('name', sql.NVarChar(255), row.name)
+        .input('nameNorm', sql.NVarChar(255), row.nameNorm);
       const result = await request.query(`
 CREATE TABLE #actions (action NVARCHAR(10));
 MERGE ads AS target
@@ -209,18 +217,24 @@ DROP TABLE #actions;
     for (const row of rows) {
       const request = pool
         .request()
-        .input('clientId', sql.Int, row.clientId)
+        .input('clientId', sql.UniqueIdentifier, row.clientId)
         .input('date', sql.Date, row.date)
-        .input('adId', sql.NVarChar, row.adId)
-        .input('spend', sql.Decimal(18, 2), row.spend ?? null)
+        .input('adId', sql.NVarChar(100), row.adId)
+        .input('campaignId', sql.NVarChar(100), row.campaignId ?? null)
+        .input('adsetId', sql.NVarChar(100), row.adsetId ?? null)
+        .input('impressions', sql.BigInt, row.impressions ?? null)
+        .input('clicks', sql.BigInt, row.clicks ?? null)
+        .input('spend', sql.Decimal(18,4), row.spend ?? null)
+        .input('purchases', sql.Int, row.purchases ?? null)
+        .input('roas', sql.Decimal(18,4), row.roas ?? null)
         .input('daysDetected', sql.Int, row.days_detected ?? 0);
       const result = await request.query(`
 CREATE TABLE #actions (action NVARCHAR(10));
 MERGE facts_meta AS target
-USING (SELECT @clientId AS client_id, @date AS [date], @adId AS ad_id, @spend AS spend, @daysDetected AS days_detected) AS source
-ON (target.client_id = source.client_id AND target.[date] = source.[date] AND target.ad_id = source.ad_id)
-WHEN MATCHED THEN UPDATE SET spend = source.spend, days_detected = source.days_detected
-WHEN NOT MATCHED THEN INSERT (client_id, [date], ad_id, spend, days_detected) VALUES (source.client_id, source.[date], source.ad_id, source.spend, source.days_detected)
+USING (SELECT @clientId AS client_id, @date AS [date], @adId AS ad_id, @campaignId AS campaign_id, @adsetId AS adset_id, @impressions AS impressions, @clicks AS clicks, @spend AS spend, @purchases AS purchases, @roas AS roas, @daysDetected AS days_detected) AS source
+ON (target.client_id = source.client_id AND target.[date] = source.[date] AND ISNULL(target.ad_id,'') = ISNULL(source.ad_id,''))
+WHEN MATCHED THEN UPDATE SET campaign_id = source.campaign_id, adset_id = source.adset_id, impressions = source.impressions, clicks = source.clicks, spend = source.spend, purchases = source.purchases, roas = source.roas, days_detected = source.days_detected
+WHEN NOT MATCHED THEN INSERT (client_id, [date], ad_id, campaign_id, adset_id, impressions, clicks, spend, purchases, roas, days_detected) VALUES (source.client_id, source.[date], source.ad_id, source.campaign_id, source.adset_id, source.impressions, source.clicks, source.spend, source.purchases, source.roas, source.days_detected)
 OUTPUT $action INTO #actions;
 SELECT action FROM #actions;
 DROP TABLE #actions;
@@ -235,7 +249,7 @@ DROP TABLE #actions;
     const pool = await this.ensurePool();
     const temp = new sql.Table('#looker');
     temp.create = true;
-    temp.columns.add('client_id', sql.Int, { nullable: false });
+    temp.columns.add('client_id', sql.UniqueIdentifier, { nullable: false });
     temp.columns.add('ad_id', sql.NVarChar(255), { nullable: true });
     temp.columns.add('ad_name_norm', sql.NVarChar(255), { nullable: true });
     temp.columns.add('ad_preview_link', sql.NVarChar(sql.MAX), { nullable: true });
@@ -257,7 +271,7 @@ WHERE a.ad_id IS NULL;
 DROP TABLE #looker;
 `);
     const updated = result.recordsets[0][0]?.updated || 0;
-    const unmatched: LookerUrlRow[] = result.recordsets[1].map((r: any) => ({ clientId: r.client_id, adId: r.ad_id ?? undefined, adNameNorm: r.ad_name_norm ?? undefined }));
+    const unmatched: LookerUrlRow[] = result.recordsets[1].map((r: any) => ({ clientId: String(r.client_id), adId: r.ad_id ?? undefined, adNameNorm: r.ad_name_norm ?? undefined }));
     return { updated, unmatched };
   }
 }
