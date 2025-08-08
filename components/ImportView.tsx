@@ -68,9 +68,26 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
     const safeLookerData = lookerData && typeof lookerData === 'object' ? lookerData : {};
     const safePerformanceData = performanceData && typeof performanceData === 'object' ? performanceData : {};
     const safeBitacoraReports = Array.isArray(bitacoraReports) ? bitacoraReports : [];
-    
+
     const [isProcessing, setIsProcessing] = useState(false);
     const [feedback, setFeedback] = useState<Feedback | null>(null);
+    const [sqlConnected, setSqlConnected] = useState<boolean | null>(null);
+
+    useEffect(() => {
+        const backendPort = localStorage.getItem('backend_port') || '3001';
+        const checkStatus = async () => {
+            try {
+                const res = await fetch(`http://localhost:${backendPort}/api/sql/status`);
+                const data = await res.json();
+                setSqlConnected(Boolean(data.connected));
+            } catch {
+                setSqlConnected(false);
+            }
+        };
+        checkStatus();
+        const interval = setInterval(checkStatus, 5000);
+        return () => clearInterval(interval);
+    }, []);
     // Helper: verifica y reconecta SQL si es necesario
     const ensureSqlConnected = async () => {
         const backendPort = localStorage.getItem('backend_port') || '3001';
@@ -419,6 +436,10 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
         <div className="max-w-4xl mx-auto space-y-8 animate-fade-in">
             <div className="bg-brand-surface rounded-lg p-6 shadow-lg space-y-6">
                 <h2 className="text-2xl font-bold text-brand-text">Centro de Importación de Datos</h2>
+                <div className="flex items-center gap-2 text-sm mb-2">
+                    <span className={`w-3 h-3 rounded-full ${sqlConnected ? 'bg-green-500' : sqlConnected === false ? 'bg-red-500' : 'bg-gray-400'}`}></span>
+                    <span className="text-brand-text">{sqlConnected ? 'SQL conectado' : sqlConnected === false ? 'SQL desconectado' : 'Verificando SQL...'}</span>
+                </div>
                 {/* Switch Local/SQL mejorado */}
                 <div className="flex items-center gap-4 mb-4">
                     <span className="font-semibold text-brand-text">Modo de importación:</span>
