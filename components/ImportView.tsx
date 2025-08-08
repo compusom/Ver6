@@ -68,9 +68,35 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
     const safeLookerData = lookerData && typeof lookerData === 'object' ? lookerData : {};
     const safePerformanceData = performanceData && typeof performanceData === 'object' ? performanceData : {};
     const safeBitacoraReports = Array.isArray(bitacoraReports) ? bitacoraReports : [];
-    
+
     const [isProcessing, setIsProcessing] = useState(false);
     const [feedback, setFeedback] = useState<Feedback | null>(null);
+    const [sqlConnected, setSqlConnected] = useState<boolean | null>(null);
+    const [backendConnected, setBackendConnected] = useState<boolean | null>(null);
+    const [importLogs, setImportLogs] = useState<string[]>([]);
+    const addLog = (msg: string) => {
+        setImportLogs(logs => [...logs, `[${new Date().toLocaleTimeString()}] ${msg}`]);
+    };
+
+    useEffect(() => {
+        const backendPort = localStorage.getItem('backend_port') || '3001';
+        const checkStatus = async () => {
+            try {
+                const healthRes = await fetch(`http://localhost:${backendPort}/api/health`);
+                if (!healthRes.ok) throw new Error('health check failed');
+                setBackendConnected(true);
+                const res = await fetch(`http://localhost:${backendPort}/api/sql/status`);
+                const data = await res.json();
+                setSqlConnected(Boolean(data.connected));
+            } catch {
+                setBackendConnected(false);
+                setSqlConnected(false);
+            }
+        };
+        checkStatus();
+        const interval = setInterval(checkStatus, 5000);
+        return () => clearInterval(interval);
+    }, []);
     // Helper: verifica y reconecta SQL si es necesario
     const ensureSqlConnected = async () => {
         const backendPort = localStorage.getItem('backend_port') || '3001';
@@ -94,27 +120,37 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
         }
     };
 
-    // Nueva función para importar a SQL
+    // Nueva función para importar a SQL con logs paso a paso
     const importExcelToSQL = async (file: File) => {
+        setImportLogs([]);
+        addLog(`Archivo seleccionado: ${file.name}`);
         setIsProcessing(true);
         setFeedback({ type: 'info', message: 'Verificando conexión y enviando archivo a SQL Server...' });
         try {
             const backendPort = localStorage.getItem('backend_port') || '3001';
+            const importUrl = `http://localhost:${backendPort}/api/sql/import-excel?allowCreateClient=true`;
+            addLog(`Conectando a ${importUrl}`);
             await ensureSqlConnected();
+            addLog('Conexión SQL verificada');
             const formData = new FormData();
             formData.append('file', file);
-            const response = await fetch(`http://localhost:${backendPort}/api/sql/import-excel?allowCreateClient=true`, {
+            addLog('Enviando archivo al backend...');
+            const response = await fetch(importUrl, {
                 method: 'POST',
                 body: formData,
             });
+            addLog('Esperando respuesta del servidor...');
             const result = await response.json().catch(() => ({}));
             if (!response.ok || result?.success === false) {
                 throw new Error(result?.error || 'Error al importar a SQL Server.');
             }
+            addLog('Importación completada correctamente');
             setFeedback({ type: 'success', message: `Importación a SQL exitosa: ${result.message || 'OK'}` });
             await loadSqlHistory();
         } catch (error) {
-            setFeedback({ type: 'error', message: error instanceof Error ? error.message : 'Error inesperado.' });
+            const message = error instanceof Error ? error.message : 'Error inesperado.';
+            addLog(`Error: ${message}`);
+            setFeedback({ type: 'error', message });
         } finally {
             setIsProcessing(false);
         }
@@ -289,18 +325,28 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
         const file = e.target.files?.[0];
         if (!file) return;
 
+        addLog(`Archivo recibido (${source}): ${file.name}`);
+        const isXlsx = file.name.toLowerCase().endsWith('.xlsx');
+        if (source !== 'txt' && !isXlsx) {
+            setFeedback({ type: 'error', message: 'Solo se permiten archivos .xlsx' });
+            addLog('Error: extensión no válida');
+            e.target.value = '';
+            return;
+        }
+
         if (source === 'txt') {
             handleTxtFileUpload(file);
         } else {
             handleXlsxFileUpload(file, source);
         }
-        
+
         e.target.value = '';
     };
 
     const handleXlsxFileUpload = async (file: File, source: 'looker' | 'meta') => {
         setIsProcessing(true);
         setFeedback({ type: 'info', message: `Procesando reporte de ${source}...` });
+        addLog(`Procesando reporte de ${source}`);
         try {
             if (source === 'looker') {
                 const checkResult = await processLookerData(file, safeClients, safeLookerData, true);
@@ -419,6 +465,16 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
         <div className="max-w-4xl mx-auto space-y-8 animate-fade-in">
             <div className="bg-brand-surface rounded-lg p-6 shadow-lg space-y-6">
                 <h2 className="text-2xl font-bold text-brand-text">Centro de Importación de Datos</h2>
+                <div className="flex items-center gap-4 text-sm mb-2">
+                    <div className="flex items-center gap-2">
+                        <span className={`w-3 h-3 rounded-full ${backendConnected ? 'bg-green-500' : backendConnected === false ? 'bg-red-500' : 'bg-gray-400'}`}></span>
+                        <span className="text-brand-text">{backendConnected ? 'Backend conectado' : backendConnected === false ? 'Backend desconectado' : 'Verificando Backend...'}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <span className={`w-3 h-3 rounded-full ${sqlConnected ? 'bg-green-500' : sqlConnected === false ? 'bg-red-500' : 'bg-gray-400'}`}></span>
+                        <span className="text-brand-text">{sqlConnected ? 'SQL conectado' : sqlConnected === false ? 'SQL desconectado' : 'Verificando SQL...'}</span>
+                    </div>
+                </div>
                 {/* Switch Local/SQL mejorado */}
                 <div className="flex items-center gap-4 mb-4">
                     <span className="font-semibold text-brand-text">Modo de importación:</span>
@@ -445,6 +501,13 @@ export const ImportView: React.FC<ImportViewProps> = ({ clients, setClients, loo
                 {feedback && (
                     <div className={`p-4 rounded-md text-sm font-semibold ${feedback.type === 'success' ? 'bg-green-500/20 text-green-300' : feedback.type === 'error' ? 'bg-red-500/20 text-red-300' : 'bg-blue-500/20 text-blue-300'}`}>
                         {feedback.message}
+                    </div>
+                )}
+                {importLogs.length > 0 && (
+                    <div className="bg-brand-border/20 rounded p-3 text-xs font-mono h-32 overflow-y-auto mb-4 text-brand-text">
+                        {importLogs.map((log, idx) => (
+                            <div key={idx}>{log}</div>
+                        ))}
                     </div>
                 )}
                 <input type="file" ref={lookerInputRef} onChange={(e) => handleFileChange(e, 'looker')} accept=".xlsx" className="hidden" />
