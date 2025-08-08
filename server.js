@@ -638,6 +638,249 @@ app.get('/api/sql/import-history', async (req, res) => {
     }
 });
 
+// Ensure required SQL schema for Meta data
+app.post('/api/sql/ensure-schema', async (req, res) => {
+    if (!sqlPool) {
+        return res.status(400).json({ ok: false, error: 'Not connected' });
+    }
+    logger.info('[SQL][EnsureSchema] start');
+    const actions = [];
+    try {
+        // 0) Rename clients.id -> client_id if needed
+        let result = await sqlPool
+            .request()
+            .query("SELECT 1 FROM sys.columns WHERE object_id=OBJECT_ID('dbo.clients') AND name='client_id'");
+        const hasClientId = result.recordset.length > 0;
+        result = await sqlPool
+            .request()
+            .query("SELECT 1 FROM sys.columns WHERE object_id=OBJECT_ID('dbo.clients') AND name='id'");
+        const hasId = result.recordset.length > 0;
+        if (!hasClientId && hasId) {
+            await sqlPool.request().query("EXEC sp_rename 'dbo.clients.id', 'client_id', 'COLUMN';");
+            actions.push({ table: 'clients', action: 'alter', details: 'renamed id to client_id' });
+        }
+
+        // 1) clients table
+        result = await sqlPool
+            .request()
+            .query("SELECT 1 FROM sys.tables WHERE name='clients'");
+        if (result.recordset.length === 0) {
+            await sqlPool.request().query(`CREATE TABLE dbo.clients(
+    client_id UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID(),
+    name NVARCHAR(255) NOT NULL,
+    name_norm NVARCHAR(255) NOT NULL,
+    created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT PK_clients PRIMARY KEY (client_id)
+);`);
+            actions.push({ table: 'clients', action: 'create', details: 'created table clients' });
+        }
+        result = await sqlPool
+            .request()
+            .query("SELECT 1 FROM sys.indexes WHERE name='UQ_clients_name_norm' AND object_id=OBJECT_ID('dbo.clients')");
+        if (result.recordset.length === 0) {
+            await sqlPool
+                .request()
+                .query('CREATE UNIQUE INDEX UQ_clients_name_norm ON dbo.clients(name_norm);');
+            actions.push({ table: 'clients', action: 'index', details: 'created UQ_clients_name_norm' });
+        }
+
+        // 2) facts_meta table
+        result = await sqlPool
+            .request()
+            .query("SELECT 1 FROM sys.tables WHERE name='facts_meta'");
+        if (result.recordset.length === 0) {
+            await sqlPool.request().query(`CREATE TABLE dbo.facts_meta(
+    fact_id BIGINT IDENTITY(1,1) PRIMARY KEY,
+    client_id UNIQUEIDENTIFIER NOT NULL,
+    [date] DATE NOT NULL,
+    ad_id NVARCHAR(100) NULL,
+    campaign_id NVARCHAR(100) NULL,
+    adset_id NVARCHAR(100) NULL,
+    impressions BIGINT NULL,
+    clicks BIGINT NULL,
+    spend DECIMAL(18,4) NULL,
+    purchases INT NULL,
+    roas DECIMAL(18,4) NULL,
+    created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+);`);
+            actions.push({ table: 'facts_meta', action: 'create', details: 'created table facts_meta' });
+        }
+        // Ensure client_id column exists and is NOT NULL
+        result = await sqlPool
+            .request()
+            .query("SELECT 1 FROM sys.columns WHERE object_id=OBJECT_ID('dbo.facts_meta') AND name='client_id'");
+        if (result.recordset.length === 0) {
+            await sqlPool
+                .request()
+                .query('ALTER TABLE dbo.facts_meta ADD client_id UNIQUEIDENTIFIER NULL;');
+            actions.push({ table: 'facts_meta', action: 'alter', details: 'added client_id column' });
+        }
+        await sqlPool
+            .request()
+            .query('ALTER TABLE dbo.facts_meta ALTER COLUMN client_id UNIQUEIDENTIFIER NOT NULL;');
+        // Computed column ad_id_nz
+        result = await sqlPool
+            .request()
+            .query("SELECT 1 FROM sys.columns WHERE object_id=OBJECT_ID('dbo.facts_meta') AND name='ad_id_nz'");
+        if (result.recordset.length === 0) {
+            await sqlPool
+                .request()
+                .query("ALTER TABLE dbo.facts_meta ADD ad_id_nz AS (ISNULL(ad_id,'')) PERSISTED;");
+            actions.push({ table: 'facts_meta', action: 'alter', details: 'added ad_id_nz computed column' });
+        }
+        // Unique index
+        result = await sqlPool
+            .request()
+            .query("SELECT 1 FROM sys.indexes WHERE name='UX_facts_meta_client_date_ad_nz' AND object_id=OBJECT_ID('dbo.facts_meta')");
+        if (result.recordset.length === 0) {
+            await sqlPool
+                .request()
+                .query('CREATE UNIQUE INDEX UX_facts_meta_client_date_ad_nz ON dbo.facts_meta(client_id, [date], ad_id_nz);');
+            actions.push({ table: 'facts_meta', action: 'index', details: 'created UX_facts_meta_client_date_ad_nz' });
+        }
+        // FK
+        result = await sqlPool
+            .request()
+            .query("SELECT 1 FROM sys.foreign_keys WHERE name='FK_facts_meta_clients' AND parent_object_id=OBJECT_ID('dbo.facts_meta')");
+        if (result.recordset.length === 0) {
+            await sqlPool
+                .request()
+                .query('ALTER TABLE dbo.facts_meta ADD CONSTRAINT FK_facts_meta_clients FOREIGN KEY (client_id) REFERENCES dbo.clients(client_id);');
+            actions.push({ table: 'facts_meta', action: 'fk', details: 'added FK_facts_meta_clients' });
+        }
+
+        // 3) ads table
+        result = await sqlPool
+            .request()
+            .query("SELECT 1 FROM sys.tables WHERE name='ads'");
+        if (result.recordset.length === 0) {
+            await sqlPool.request().query(`CREATE TABLE dbo.ads(
+    ad_id NVARCHAR(100) NOT NULL PRIMARY KEY,
+    client_id UNIQUEIDENTIFIER NOT NULL,
+    name NVARCHAR(255) NULL,
+    ad_name_norm NVARCHAR(255) NULL,
+    ad_preview_link NVARCHAR(1000) NULL,
+    ad_creative_thumbnail_url NVARCHAR(1000) NULL,
+    created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+);`);
+            actions.push({ table: 'ads', action: 'create', details: 'created table ads' });
+        }
+        result = await sqlPool
+            .request()
+            .query("SELECT 1 FROM sys.indexes WHERE name='IX_ads_client_adname' AND object_id=OBJECT_ID('dbo.ads')");
+        if (result.recordset.length === 0) {
+            await sqlPool
+                .request()
+                .query('CREATE INDEX IX_ads_client_adname ON dbo.ads(client_id, ad_name_norm);');
+            actions.push({ table: 'ads', action: 'index', details: 'created IX_ads_client_adname' });
+        }
+
+        // 4) Auxiliary tables
+        result = await sqlPool
+            .request()
+            .query("SELECT 1 FROM sys.tables WHERE name='import_history'");
+        if (result.recordset.length === 0) {
+            await sqlPool.request().query(`CREATE TABLE dbo.import_history(
+    id BIGINT IDENTITY(1,1) PRIMARY KEY,
+    source NVARCHAR(50) NOT NULL,
+    payload NVARCHAR(MAX) NULL,
+    created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+);`);
+            actions.push({ table: 'import_history', action: 'create', details: 'created table import_history' });
+        }
+        result = await sqlPool
+            .request()
+            .query("SELECT 1 FROM sys.tables WHERE name='processed_files_hashes'");
+        if (result.recordset.length === 0) {
+            await sqlPool.request().query(`CREATE TABLE dbo.processed_files_hashes(
+    id BIGINT IDENTITY(1,1) PRIMARY KEY,
+    file_hash NVARCHAR(128) NOT NULL,
+    created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+);`);
+            actions.push({ table: 'processed_files_hashes', action: 'create', details: 'created table processed_files_hashes' });
+        }
+
+        logger.info('[SQL][EnsureSchema] end');
+        res.json({ ok: true, actions, db: sqlPool.config.database, schema: 'dbo' });
+    } catch (error) {
+        logger.error('[SQL][EnsureSchema] error', error);
+        res.status(500).json({ ok: false, error: error.message, actions });
+    }
+});
+
+// Diagnostics route
+app.get('/api/sql/diagnostics', async (req, res) => {
+    if (!sqlPool) {
+        return res.status(400).json({ error: 'Not connected' });
+    }
+    logger.info('[SQL][Diagnostics] start');
+    const schemaChecks = [];
+    const stats = {};
+    try {
+        const checkTable = async (table, columns = [], indexes = [], fk = null) => {
+            const exists = (await sqlPool
+                .request()
+                .query(`SELECT 1 FROM sys.tables WHERE name='${table}'`)).recordset.length > 0;
+            const colStatus = {};
+            const idxStatus = {};
+            if (exists) {
+                for (const c of columns) {
+                    const r = await sqlPool
+                        .request()
+                        .query(`SELECT 1 FROM sys.columns WHERE object_id=OBJECT_ID('dbo.${table}') AND name='${c}'`);
+                    colStatus[c] = r.recordset.length > 0;
+                }
+                for (const i of indexes) {
+                    const r = await sqlPool
+                        .request()
+                        .query(`SELECT 1 FROM sys.indexes WHERE name='${i}' AND object_id=OBJECT_ID('dbo.${table}')`);
+                    idxStatus[i] = r.recordset.length > 0;
+                }
+            }
+            let fkStatus;
+            if (exists && fk) {
+                const r = await sqlPool
+                    .request()
+                    .query(`SELECT 1 FROM sys.foreign_keys WHERE name='${fk}' AND parent_object_id=OBJECT_ID('dbo.${table}')`);
+                fkStatus = r.recordset.length > 0 ? `${fk}:ok` : `${fk}:missing`;
+            }
+            const entry = { table, exists, columns: colStatus, indexes: idxStatus };
+            if (fkStatus) entry.fk = fkStatus;
+            schemaChecks.push(entry);
+            return exists;
+        };
+
+        const existsClients = await checkTable('clients', ['client_id', 'name', 'name_norm'], ['UQ_clients_name_norm']);
+        const existsFacts = await checkTable('facts_meta', ['client_id', 'date', 'ad_id', 'ad_id_nz'], ['UX_facts_meta_client_date_ad_nz'], 'FK_facts_meta_clients');
+        const existsAds = await checkTable('ads', ['ad_id', 'client_id', 'ad_name_norm'], ['IX_ads_client_adname']);
+
+        if (existsClients) {
+            const r = await sqlPool.request().query('SELECT COUNT(*) AS c FROM dbo.clients');
+            stats.clients = { count: r.recordset[0].c };
+        }
+        if (existsFacts) {
+            const r = await sqlPool
+                .request()
+                .query('SELECT COUNT(*) AS c, MIN([date]) AS minDate, MAX([date]) AS maxDate FROM dbo.facts_meta');
+            stats.facts_meta = {
+                count: r.recordset[0].c,
+                minDate: r.recordset[0].minDate ? r.recordset[0].minDate.toISOString().slice(0, 10) : null,
+                maxDate: r.recordset[0].maxDate ? r.recordset[0].maxDate.toISOString().slice(0, 10) : null,
+            };
+        }
+        if (existsAds) {
+            const r = await sqlPool.request().query('SELECT COUNT(*) AS c FROM dbo.ads');
+            stats.ads = { count: r.recordset[0].c };
+        }
+
+        logger.info('[SQL][Diagnostics] end');
+        res.json({ db: sqlPool.config.database, schema: 'dbo', schemaChecks, stats });
+    } catch (error) {
+        logger.error('[SQL][Diagnostics] error', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 /**
  * Health check endpoint
  */
