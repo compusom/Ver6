@@ -646,47 +646,78 @@ app.post('/api/sql/ensure-schema', async (req, res) => {
     logger.info('[SQL][EnsureSchema] start');
     const actions = [];
     try {
-        // 0) Rename clients.id -> client_id if needed
-        let result = await sqlPool
-            .request()
-            .query("SELECT 1 FROM sys.columns WHERE object_id=OBJECT_ID('dbo.clients') AND name='client_id'");
-        const hasClientId = result.recordset.length > 0;
-        result = await sqlPool
-            .request()
-            .query("SELECT 1 FROM sys.columns WHERE object_id=OBJECT_ID('dbo.clients') AND name='id'");
-        const hasId = result.recordset.length > 0;
-        if (!hasClientId && hasId) {
-            await sqlPool.request().query("EXEC sp_rename 'dbo.clients.id', 'client_id', 'COLUMN';");
-        }
+        const schemaSql = `
+SET NOCOUNT ON;
+DECLARE @actions TABLE(step NVARCHAR(100), detail NVARCHAR(4000), status NVARCHAR(50), rows INT NULL);
 
-        // 1) clients table
-        result = await sqlPool
-            .request()
-            .query("SELECT 1 FROM sys.tables WHERE name='clients'");
-        if (result.recordset.length === 0) {
-            await sqlPool.request().query(`CREATE TABLE dbo.clients(
+DECLARE @clients_client_id_type NVARCHAR(128);
+DECLARE @facts_client_id_type   NVARCHAR(128);
+
+SELECT @clients_client_id_type = TY.name
+FROM sys.columns C
+JOIN sys.types TY ON TY.user_type_id = C.user_type_id
+WHERE C.object_id = OBJECT_ID('dbo.clients') AND C.name = 'client_id';
+
+SELECT @facts_client_id_type = TY.name
+FROM sys.columns C
+JOIN sys.types TY ON TY.user_type_id = C.user_type_id
+WHERE C.object_id = OBJECT_ID('dbo.facts_meta') AND C.name = 'client_id';
+
+IF OBJECT_ID('dbo.clients','U') IS NULL
+BEGIN
+  CREATE TABLE dbo.clients(
     client_id UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID(),
     name NVARCHAR(255) NOT NULL,
     name_norm NVARCHAR(255) NOT NULL,
     created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
     CONSTRAINT PK_clients PRIMARY KEY (client_id)
-);`);
-        }
-        result = await sqlPool
-            .request()
-            .query("SELECT 1 FROM sys.indexes WHERE name='UQ_clients_name_norm' AND object_id=OBJECT_ID('dbo.clients')");
-        if (result.recordset.length === 0) {
-            await sqlPool
-                .request()
-                .query('CREATE UNIQUE INDEX UQ_clients_name_norm ON dbo.clients(name_norm);');
-        }
+  );
+  INSERT INTO @actions VALUES('create-table','clients','ok',NULL);
+  SET @clients_client_id_type = 'uniqueidentifier';
+END;
 
-        // 2) facts_meta table
-        result = await sqlPool
-            .request()
-            .query("SELECT 1 FROM sys.tables WHERE name='facts_meta'");
-        if (result.recordset.length === 0) {
-            await sqlPool.request().query(`CREATE TABLE dbo.facts_meta(
+IF COL_LENGTH('dbo.clients','client_id') IS NULL AND COL_LENGTH('dbo.clients','id') IS NOT NULL
+BEGIN
+  EXEC sp_rename 'dbo.clients.id', 'client_id', 'COLUMN';
+  INSERT INTO @actions VALUES('rename-column','clients.id -> clients.client_id','ok',NULL);
+  SET @clients_client_id_type = NULL;
+END;
+
+SELECT @clients_client_id_type = TY.name
+FROM sys.columns C
+JOIN sys.types TY ON TY.user_type_id = C.user_type_id
+WHERE C.object_id = OBJECT_ID('dbo.clients') AND C.name = 'client_id';
+
+IF @clients_client_id_type IS NOT NULL AND @clients_client_id_type <> 'uniqueidentifier'
+BEGIN
+  IF COL_LENGTH('dbo.clients','client_id_uid') IS NULL
+    ALTER TABLE dbo.clients ADD client_id_uid UNIQUEIDENTIFIER NULL;
+  UPDATE dbo.clients SET client_id_uid = ISNULL(client_id_uid, NEWID());
+  DECLARE @pk_clients sysname;
+  SELECT @pk_clients = kc.name
+  FROM sys.key_constraints kc
+  WHERE kc.parent_object_id = OBJECT_ID('dbo.clients') AND kc.type='PK';
+  IF @pk_clients IS NOT NULL
+  BEGIN
+    DECLARE @sql NVARCHAR(MAX) = N'ALTER TABLE dbo.clients DROP CONSTRAINT ['+@pk_clients+N']';
+    EXEC sp_executesql @sql;
+  END
+  ALTER TABLE dbo.clients ADD CONSTRAINT PK_clients PRIMARY KEY (client_id_uid);
+  EXEC sp_rename 'dbo.clients.client_id', 'client_id_int', 'COLUMN';
+  EXEC sp_rename 'dbo.clients.client_id_uid', 'client_id', 'COLUMN';
+  INSERT INTO @actions VALUES('migrate-type','clients.client_id int -> uniqueidentifier','ok',NULL);
+  IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='UQ_clients_name_norm' AND object_id=OBJECT_ID('dbo.clients'))
+    CREATE UNIQUE INDEX UQ_clients_name_norm ON dbo.clients(name_norm);
+END
+ELSE
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='UQ_clients_name_norm' AND object_id=OBJECT_ID('dbo.clients'))
+    CREATE UNIQUE INDEX UQ_clients_name_norm ON dbo.clients(name_norm);
+END;
+
+IF OBJECT_ID('dbo.facts_meta','U') IS NULL
+BEGIN
+  CREATE TABLE dbo.facts_meta(
     fact_id BIGINT IDENTITY(1,1) NOT NULL,
     client_id UNIQUEIDENTIFIER NULL,
     [date] DATE NOT NULL,
@@ -699,116 +730,114 @@ app.post('/api/sql/ensure-schema', async (req, res) => {
     purchases INT NULL,
     roas DECIMAL(18,4) NULL,
     created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
-);`);
-        }
-        // Ensure client_id column exists
-        result = await sqlPool
-            .request()
-            .query("SELECT 1 FROM sys.columns WHERE object_id=OBJECT_ID('dbo.facts_meta') AND name='client_id'");
-        if (result.recordset.length === 0) {
-            await sqlPool
-                .request()
-                .query('ALTER TABLE dbo.facts_meta ADD client_id UNIQUEIDENTIFIER NULL;');
-        }
-        // Computed column ad_id_nz
-        result = await sqlPool
-            .request()
-            .query("SELECT 1 FROM sys.columns WHERE object_id=OBJECT_ID('dbo.facts_meta') AND name='ad_id_nz'");
-        if (result.recordset.length === 0) {
-            await sqlPool
-                .request()
-                .query("ALTER TABLE dbo.facts_meta ADD ad_id_nz AS (ISNULL(ad_id,'')) PERSISTED;");
-        }
+  );
+  INSERT INTO @actions VALUES('create-table','facts_meta','ok',NULL);
+  SET @facts_client_id_type = 'uniqueidentifier';
+END;
 
-        const idxName = 'UX_facts_meta_client_date_ad_nz';
-        const fkName = 'FK_facts_meta_clients';
+IF COL_LENGTH('dbo.facts_meta','ad_id_nz') IS NULL
+BEGIN
+  ALTER TABLE dbo.facts_meta ADD ad_id_nz AS (ISNULL(ad_id,'')) PERSISTED;
+  INSERT INTO @actions VALUES('add-column','facts_meta.ad_id_nz (computed persisted)','ok',NULL);
+END;
 
-        // 2) Drop dependencies on client_id
-        result = await sqlPool
-            .request()
-            .query(`SELECT 1 FROM sys.indexes WHERE name='${idxName}' AND object_id=OBJECT_ID('dbo.facts_meta')`);
-        if (result.recordset.length > 0) {
-            await sqlPool.request().query(`DROP INDEX [${idxName}] ON dbo.facts_meta;`);
-            actions.push({ step: 'drop-unique-index', name: idxName, status: 'dropped' });
-        } else {
-            actions.push({ step: 'drop-unique-index', name: idxName, status: 'absent' });
-        }
+IF EXISTS (SELECT 1 FROM sys.indexes WHERE name='UX_facts_meta_client_date_ad_nz' AND object_id=OBJECT_ID('dbo.facts_meta'))
+BEGIN
+  DROP INDEX [UX_facts_meta_client_date_ad_nz] ON dbo.facts_meta;
+  INSERT INTO @actions VALUES('drop-index','UX_facts_meta_client_date_ad_nz','dropped',NULL);
+END;
 
-        result = await sqlPool
-            .request()
-            .query(`SELECT 1 FROM sys.foreign_keys WHERE name='${fkName}' AND parent_object_id=OBJECT_ID('dbo.facts_meta')`);
-        if (result.recordset.length > 0) {
-            await sqlPool.request().query(`ALTER TABLE dbo.facts_meta DROP CONSTRAINT [${fkName}];`);
-            actions.push({ step: 'drop-fk', name: fkName, status: 'dropped' });
-        } else {
-            actions.push({ step: 'drop-fk', name: fkName, status: 'absent' });
-        }
+IF EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name='FK_facts_meta_clients' AND parent_object_id=OBJECT_ID('dbo.facts_meta'))
+BEGIN
+  ALTER TABLE dbo.facts_meta DROP CONSTRAINT [FK_facts_meta_clients];
+  INSERT INTO @actions VALUES('drop-fk','FK_facts_meta_clients','dropped',NULL);
+END;
 
-        result = await sqlPool
-            .request()
-            .query(`SELECT kc.name
-                FROM sys.key_constraints kc
-                JOIN sys.index_columns ic ON ic.object_id = kc.parent_object_id AND ic.index_id = kc.unique_index_id
-                JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
-                WHERE kc.parent_object_id = OBJECT_ID('dbo.facts_meta')
-                  AND kc.type = 'PK'
-                  AND c.name = 'client_id';`);
-        if (result.recordset.length > 0) {
-            const pkName = result.recordset[0].name;
-            await sqlPool.request().query(`ALTER TABLE dbo.facts_meta DROP CONSTRAINT [${pkName}];`);
-            actions.push({ step: 'drop-pk-on-client_id', name: pkName, status: 'dropped' });
-        } else {
-            actions.push({ step: 'drop-pk-on-client_id', name: null, status: 'absent' });
-        }
+DECLARE @pk_facts sysname;
+SELECT @pk_facts = kc.name
+FROM sys.key_constraints kc
+JOIN sys.index_columns ic ON ic.object_id = kc.parent_object_id AND ic.index_id = kc.unique_index_id
+JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+WHERE kc.parent_object_id = OBJECT_ID('dbo.facts_meta')
+  AND kc.type = 'PK'
+  AND c.name = 'client_id';
 
-        // 3) Placeholder client and backfill NULLs
-        result = await sqlPool.request().query(`IF NOT EXISTS (SELECT 1 FROM dbo.clients WHERE name_norm = N'unassigned')
-  INSERT INTO dbo.clients (client_id, name, name_norm) VALUES (NEWID(), N'Unassigned', N'unassigned');
-SELECT TOP (1) client_id FROM dbo.clients WHERE name_norm = N'unassigned';`);
-        const unassigned = result.recordset[0].client_id;
+IF @pk_facts IS NOT NULL
+BEGIN
+  DECLARE @sql2 NVARCHAR(MAX) = N'ALTER TABLE dbo.facts_meta DROP CONSTRAINT ['+@pk_facts+N']';
+  EXEC sp_executesql @sql2;
+  INSERT INTO @actions VALUES('drop-pk-on-client_id',@pk_facts,'dropped',NULL);
+END;
 
-        const updateRes = await sqlPool
-            .request()
-            .query(`UPDATE dbo.facts_meta SET client_id='${unassigned}' WHERE client_id IS NULL;`);
-        const rowsAffected = updateRes.rowsAffected ? updateRes.rowsAffected[0] : 0;
-        actions.push({ step: 'backfill-null-client_id', rowsAffected });
+SELECT @facts_client_id_type = TY.name
+FROM sys.columns C
+JOIN sys.types TY ON TY.user_type_id = C.user_type_id
+WHERE C.object_id = OBJECT_ID('dbo.facts_meta') AND C.name = 'client_id';
 
-        // 4) Alter client_id to NOT NULL
-        await sqlPool
-            .request()
-            .query('ALTER TABLE dbo.facts_meta ALTER COLUMN client_id UNIQUEIDENTIFIER NOT NULL;');
-        actions.push({ step: 'alter-client_id-not-null', status: 'ok' });
+IF @facts_client_id_type IS NOT NULL AND @facts_client_id_type <> 'uniqueidentifier'
+BEGIN
+  IF COL_LENGTH('dbo.facts_meta','client_id_uid') IS NULL
+    ALTER TABLE dbo.facts_meta ADD client_id_uid UNIQUEIDENTIFIER NULL;
 
-        // 5) Recreate PK, FK, Unique index
-        result = await sqlPool
-            .request()
-            .query(`SELECT 1 FROM sys.key_constraints WHERE parent_object_id=OBJECT_ID('dbo.facts_meta') AND type='PK'`);
-        if (result.recordset.length === 0) {
-            await sqlPool.request().query('ALTER TABLE dbo.facts_meta ADD CONSTRAINT PK_facts_meta PRIMARY KEY (fact_id);');
-            actions.push({ step: 'create-pk-fact_id', status: 'ok' });
-        } else {
-            actions.push({ step: 'create-pk-fact_id', status: 'exists' });
-        }
+  IF NOT EXISTS (SELECT 1 FROM dbo.clients WHERE name_norm = N'unassigned')
+    INSERT INTO dbo.clients (client_id, name, name_norm) VALUES (NEWID(), N'Unassigned', N'unassigned');
 
-        result = await sqlPool
-            .request()
-            .query(`SELECT 1 FROM sys.foreign_keys WHERE name='${fkName}' AND parent_object_id=OBJECT_ID('dbo.facts_meta')`);
-        if (result.recordset.length === 0) {
-            await sqlPool.request().query(`ALTER TABLE dbo.facts_meta ADD CONSTRAINT [${fkName}] FOREIGN KEY (client_id) REFERENCES dbo.clients(client_id);`);
-            actions.push({ step: 'create-fk', name: fkName, status: 'ok' });
-        } else {
-            actions.push({ step: 'create-fk', name: fkName, status: 'exists' });
-        }
+  DECLARE @unassigned UNIQUEIDENTIFIER = (SELECT TOP (1) client_id FROM dbo.clients WHERE name_norm = N'unassigned');
 
-        result = await sqlPool
-            .request()
-            .query(`SELECT 1 FROM sys.indexes WHERE name='${idxName}' AND object_id=OBJECT_ID('dbo.facts_meta')`);
-        if (result.recordset.length === 0) {
-            await sqlPool.request().query(`CREATE UNIQUE INDEX [${idxName}] ON dbo.facts_meta(client_id, [date], ad_id_nz);`);
-            actions.push({ step: 'create-unique-index', name: idxName, status: 'ok' });
-        } else {
-            actions.push({ step: 'create-unique-index', name: idxName, status: 'exists' });
-        }
+  UPDATE dbo.facts_meta SET client_id_uid = ISNULL(client_id_uid, @unassigned);
+
+  ALTER TABLE dbo.facts_meta DROP COLUMN client_id;
+  EXEC sp_rename 'dbo.facts_meta.client_id_uid', 'client_id', 'COLUMN';
+
+  INSERT INTO @actions VALUES('migrate-type','facts_meta.client_id int -> uniqueidentifier (placeholder)','ok',@@ROWCOUNT);
+END
+ELSE
+BEGIN
+  IF EXISTS (SELECT 1 FROM dbo.facts_meta WHERE client_id IS NULL)
+  BEGIN
+    IF NOT EXISTS (SELECT 1 FROM dbo.clients WHERE name_norm = N'unassigned')
+      INSERT INTO dbo.clients (client_id, name, name_norm) VALUES (NEWID(), N'Unassigned', N'unassigned');
+    DECLARE @unassigned2 UNIQUEIDENTIFIER = (SELECT TOP (1) client_id FROM dbo.clients WHERE name_norm = N'unassigned');
+    UPDATE dbo.facts_meta SET client_id = @unassigned2 WHERE client_id IS NULL;
+    INSERT INTO @actions VALUES('backfill-null','facts_meta.client_id -> Unassigned','ok',@@ROWCOUNT);
+  END
+END;
+
+BEGIN TRY
+  ALTER TABLE dbo.facts_meta ALTER COLUMN client_id UNIQUEIDENTIFIER NOT NULL;
+  INSERT INTO @actions VALUES('alter-not-null','facts_meta.client_id','ok',NULL);
+END TRY
+BEGIN CATCH
+  DECLARE @msg NVARCHAR(4000) = ERROR_MESSAGE();
+  INSERT INTO @actions VALUES('alter-not-null','facts_meta.client_id',@msg,NULL);
+  THROW;
+END CATCH
+
+IF NOT EXISTS (SELECT 1 FROM sys.key_constraints WHERE parent_object_id=OBJECT_ID('dbo.facts_meta') AND type='PK')
+BEGIN
+  ALTER TABLE dbo.facts_meta ADD CONSTRAINT PK_facts_meta PRIMARY KEY (fact_id);
+  INSERT INTO @actions VALUES('create-pk','PK_facts_meta on fact_id','ok',NULL);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name='FK_facts_meta_clients' AND parent_object_id=OBJECT_ID('dbo.facts_meta'))
+BEGIN
+  ALTER TABLE dbo.facts_meta
+    ADD CONSTRAINT [FK_facts_meta_clients] FOREIGN KEY (client_id)
+    REFERENCES dbo.clients(client_id);
+  INSERT INTO @actions VALUES('create-fk','FK_facts_meta_clients','ok',NULL);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='UX_facts_meta_client_date_ad_nz' AND object_id=OBJECT_ID('dbo.facts_meta'))
+BEGIN
+  CREATE UNIQUE INDEX [UX_facts_meta_client_date_ad_nz]
+  ON dbo.facts_meta(client_id, [date], ad_id_nz);
+  INSERT INTO @actions VALUES('create-unique-index','UX_facts_meta_client_date_ad_nz','ok',NULL);
+END;
+
+SELECT step, detail, status, rows FROM @actions;
+`;
+        let result = await sqlPool.request().query(schemaSql);
+        actions.push(...result.recordset);
 
         // 3) ads table
         result = await sqlPool
@@ -824,6 +853,9 @@ SELECT TOP (1) client_id FROM dbo.clients WHERE name_norm = N'unassigned';`);
     ad_creative_thumbnail_url NVARCHAR(1000) NULL,
     created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
 );`);
+            actions.push({ step: 'create-table', detail: 'ads', status: 'ok' });
+        } else {
+            actions.push({ step: 'create-table', detail: 'ads', status: 'exists' });
         }
         result = await sqlPool
             .request()
@@ -832,6 +864,9 @@ SELECT TOP (1) client_id FROM dbo.clients WHERE name_norm = N'unassigned';`);
             await sqlPool
                 .request()
                 .query('CREATE INDEX IX_ads_client_adname ON dbo.ads(client_id, ad_name_norm);');
+            actions.push({ step: 'create-index', detail: 'IX_ads_client_adname on ads', status: 'ok' });
+        } else {
+            actions.push({ step: 'create-index', detail: 'IX_ads_client_adname on ads', status: 'exists' });
         }
 
         // 4) Auxiliary tables
@@ -845,6 +880,9 @@ SELECT TOP (1) client_id FROM dbo.clients WHERE name_norm = N'unassigned';`);
     payload NVARCHAR(MAX) NULL,
     created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
 );`);
+            actions.push({ step: 'create-table', detail: 'import_history', status: 'ok' });
+        } else {
+            actions.push({ step: 'create-table', detail: 'import_history', status: 'exists' });
         }
         result = await sqlPool
             .request()
@@ -855,6 +893,9 @@ SELECT TOP (1) client_id FROM dbo.clients WHERE name_norm = N'unassigned';`);
     file_hash NVARCHAR(128) NOT NULL,
     created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
 );`);
+            actions.push({ step: 'create-table', detail: 'processed_files_hashes', status: 'ok' });
+        } else {
+            actions.push({ step: 'create-table', detail: 'processed_files_hashes', status: 'exists' });
         }
 
         logger.info('[SQL][EnsureSchema] end');
