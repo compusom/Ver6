@@ -1,69 +1,59 @@
 import { read, utils } from 'xlsx';
-import { MetaDb, LookerUrlRow } from '../database/MetaDb.js';
+import { MetaDb, MetaAdRow } from '../database/MetaDb.js';
 import normalizeName from '../lib/normalizeName.js';
+import adIdFromName from '../lib/adIdFromName.js';
 import Logger from '../Logger.js';
 
 export interface LookerImportResult {
   total: number;
+  inserted: number;
   updated: number;
-  unmatched: Record<string, string[]>; // account -> identifiers
+  unmatched: string[]; // accounts not found
 }
 
 /**
- * Import Looker report from an ArrayBuffer/Buffer. Updates ad URLs by matching on client + ad_id or ad_name_norm.
+ * Import Looker report from an ArrayBuffer/Buffer. Upserts ads with preview/thumbnail
+ * using ad_id derived from ad name.
  */
 export async function importLookerReport(data: ArrayBuffer, db: MetaDb): Promise<LookerImportResult> {
   const workbook = read(data, { type: 'array' });
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const sheet = workbook.Sheets['Hoja 1'] || workbook.Sheets[workbook.SheetNames[0]];
   const rows = utils.sheet_to_json<any>(sheet);
   if (rows.length === 0) {
     Logger.warn('[importLookerReport] No rows in file');
-    return { total: 0, updated: 0, unmatched: {} };
+    return { total: 0, inserted: 0, updated: 0, unmatched: [] };
   }
 
-  const staging: LookerUrlRow[] = [];
-  const unmatched: { account: string; id: string }[] = [];
-  const clientNames: Record<string, string> = {};
+  const staging: MetaAdRow[] = [];
+  const unmatched = new Set<string>();
 
   for (const r of rows) {
-    const rawAccount = r['account_name'] || r['Account name'] || r['nombre de la cuenta'] || '';
+    const rawAccount = r['account_name'] || r['Account name'] || r['Account Name'] || r['nombre de la cuenta'] || '';
     const client = await db.findClientByNameNorm(normalizeName(String(rawAccount)));
-    const adId = r['ad_id'] || r['Ad ID'] || r['ad id'];
-    const adName = r['ad_name'] || r['Ad name'] || r['nombre del anuncio'];
-    const adNameNorm = adName ? normalizeName(String(adName)) : undefined;
-    const preview = r['ad_preview_link'] || r['Ad Preview Link'];
-    const thumb = r['ad_creative_thumbnail_url'] || r['Ad Creative Thumbnail Url'];
-    const identifier = adId ? String(adId) : adNameNorm || '';
-
     if (!client) {
-      unmatched.push({ account: String(rawAccount), id: identifier });
+      unmatched.add(String(rawAccount));
       continue;
     }
-    clientNames[client.id] = client.name;
+
+    const adName = r['Ad name'] || r['Ad Name'] || r['Nombre del anuncio'] || '';
+    const adId = adIdFromName(String(adName));
+    const adNameNorm = normalizeName(String(adName));
+    const preview = r['Ad Preview Link'] || r['ad_preview_link'];
+    const thumb = r['Ad Creative Thumbnail Url'] || r['ad_creative_thumbnail_url'];
+
     staging.push({
       clientId: client.id,
-      adId: adId ? String(adId) : undefined,
-      adNameNorm,
+      adId,
+      name: String(adName),
+      nameNorm: adNameNorm,
       adPreviewLink: preview,
       adCreativeThumbnailUrl: thumb,
     });
   }
 
-  const dbResult = await db.updateAdUrls(staging);
-  dbResult.unmatched.forEach(u => {
-    const account = clientNames[u.clientId] || String(u.clientId);
-    const id = u.adId ? u.adId : u.adNameNorm || '';
-    unmatched.push({ account, id });
-  });
-
-  const grouped: Record<string, string[]> = {};
-  unmatched.forEach(u => {
-    if (!grouped[u.account]) grouped[u.account] = [];
-    grouped[u.account].push(u.id);
-  });
-
-  Logger.info(`{importLookerReport} processed=${rows.length} updated=${dbResult.updated} unmatched=${unmatched.length}`);
-  return { total: rows.length, updated: dbResult.updated, unmatched: grouped };
+  const dbResult = await db.upsertAds(staging);
+  Logger.info(`[importLookerReport] processed=${rows.length} inserted=${dbResult.inserted} updated=${dbResult.updated} unmatched=${unmatched.size}`);
+  return { total: rows.length, inserted: dbResult.inserted, updated: dbResult.updated, unmatched: Array.from(unmatched) };
 }
 
 export default importLookerReport;
