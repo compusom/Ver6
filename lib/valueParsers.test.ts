@@ -14,4 +14,8 @@ describe('valueParsers', () => {
     expect(toPct('5,43')).toBeCloseTo(0.0543);
     expect(toPct('0,54')).toBeCloseTo(0.54);
   });
+
+  it('returns null for non-finite numbers', () => {
+    expect(toNumberES('Infinity')).toBeNull();
+  });
 });
