@@ -125,8 +125,8 @@ const MSSQL_TYPE_MAP = new Map(
 
 // Utility numeric parser mirroring the client-side logic
 const parseNumber = (value) => {
-    if (value === null || value === undefined) return 0;
-    if (typeof value === 'number') return value;
+    if (value === null || value === undefined) return null;
+    if (typeof value === 'number') return isNaN(value) ? null : value;
     if (typeof value === 'string') {
         const cleaned = value
             .replace(/[€$]/g, '')
@@ -134,9 +134,9 @@ const parseNumber = (value) => {
             .replace(/\./g, '')
             .replace(/,/g, '.');
         const num = parseFloat(cleaned);
-        return isNaN(num) ? 0 : num;
+        return isNaN(num) ? null : num;
     }
-    return 0;
+    return null;
 };
 
 // Ensure required SQL schema for Meta imports
@@ -693,10 +693,10 @@ SELECT client_id FROM @out;`);
                 ad_id: adId,
                 campaign_id: campaignId === '' ? null : campaignId,
                 adset_id: adsetId === '' ? null : adsetId,
-                impressions: r['impressions'] ?? null,
-                clicks: r['clicks'] ?? null,
+                impressions: parseNumber(r['impressions'] ?? null),
+                clicks: parseNumber(r['clicks'] ?? null),
                 spend: parseNumber(r['spend'] ?? r['amount_spent (eur)'] ?? null),
-                purchases: r['purchases'] ?? null,
+                purchases: parseNumber(r['purchases'] ?? null),
                 purchase_value: parseNumber(r['purchase_value'] ?? r['purchase value'] ?? null)
             });
         }
@@ -704,6 +704,7 @@ SELECT client_id FROM @out;`);
         const sessionId = uuidv4();
         const table = new sql.Table('_staging_facts');
         table.create = false;
+        table.schema = 'dbo';
         table.columns.add('session_id', sql.UniqueIdentifier, { nullable: false });
         table.columns.add('client_id', sql.UniqueIdentifier, { nullable: false });
         table.columns.add('date', sql.Date, { nullable: false });
@@ -715,8 +716,14 @@ SELECT client_id FROM @out;`);
         table.columns.add('spend', sql.Decimal(18,4), { nullable: true });
         table.columns.add('purchases', sql.Int, { nullable: true });
         table.columns.add('purchase_value', sql.Decimal(18,4), { nullable: true });
-        for (const f of facts) {
-            table.rows.add(sessionId, f.client_id, f.date, f.ad_id, f.campaign_id, f.adset_id, f.impressions, f.clicks, f.spend, f.purchases, f.purchase_value);
+        for (let i = 0; i < facts.length; i++) {
+            const f = facts[i];
+            try {
+                table.rows.add(sessionId, f.client_id, f.date, f.ad_id, f.campaign_id, f.adset_id, f.impressions, f.clicks, f.spend, f.purchases, f.purchase_value);
+            } catch (rowErr) {
+                logger.error(`[SQL][ImportMeta] Error adding row ${i}`, { row: f, error: rowErr });
+                throw new Error(`Failed to add row ${i}: ${rowErr.message}`);
+            }
         }
         await sqlPool.request().bulk(table);
 
