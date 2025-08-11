@@ -13,6 +13,7 @@ export interface MetaMetricRow {
   clicks?: number | null;
   spend?: number | null;
   purchases?: number | null;
+  value?: number | null;
   roas?: number | null;
   days_detected?: number;
   [key: string]: any;
@@ -41,6 +42,10 @@ export interface MetaDb {
   upsertAds(rows: MetaAdRow[]): Promise<{ inserted: number; updated: number }>;
   upsertMetaMetrics(rows: MetaMetricRow[]): Promise<{ inserted: number; updated: number }>;
   updateAdUrls(rows: LookerUrlRow[]): Promise<{ updated: number; unmatched: LookerUrlRow[] }>;
+  bulkInsertStaging(rows: MetaMetricRow[]): Promise<number>;
+  mergeFromStaging(clientId: string): Promise<{ ready: number; inserted: number; updated: number }>;
+  hasFileHash(hash: string): Promise<boolean>;
+  saveFileHash(hash: string): Promise<void>;
 }
 
 export function createMetaDb(): MetaDb {
@@ -54,6 +59,8 @@ class MetaDbLocal implements MetaDb {
   private clients: Map<string, Client> = new Map();
   private metrics: Map<string, any> = new Map();
   private ads: Map<string, MetaAdRow> = new Map();
+  private staging: MetaMetricRow[] = [];
+  private fileHashes: Set<string> = new Set();
 
   async findClientByNameNorm(nameNorm: string): Promise<Client | undefined> {
     for (const c of this.clients.values()) {
@@ -133,6 +140,43 @@ class MetaDbLocal implements MetaDb {
       }
     }
     return { updated, unmatched };
+  }
+
+  async bulkInsertStaging(rows: MetaMetricRow[]): Promise<number> {
+    this.staging.push(...rows);
+    return rows.length;
+  }
+
+  async mergeFromStaging(clientId: string): Promise<{ ready: number; inserted: number; updated: number }> {
+    const rows = this.staging.filter(r => r.clientId === clientId);
+    const groups = new Map<string, MetaMetricRow>();
+    for (const r of rows) {
+      const key = `${r.date}-${r.adId}`;
+      const g = groups.get(key) || { clientId, date: r.date, adId: r.adId, impressions: 0, clicks: 0, spend: 0, purchases: 0, value: 0, roas: null };
+      g.impressions! += r.impressions ?? 0;
+      g.clicks! += r.clicks ?? 0;
+      g.spend! += r.spend ?? 0;
+      g.purchases! += r.purchases ?? 0;
+      g.value! += r.value ?? 0;
+      groups.set(key, g);
+    }
+    let inserted = 0, updated = 0;
+    for (const g of groups.values()) {
+      if (g.spend && g.spend > 0 && g.value) g.roas = g.value / g.spend;
+      const key = `${g.clientId}-${g.date}-${g.adId}`;
+      if (this.metrics.has(key)) { this.metrics.set(key, { ...this.metrics.get(key), ...g }); updated++; }
+      else { this.metrics.set(key, g); inserted++; }
+    }
+    this.staging = this.staging.filter(r => r.clientId !== clientId);
+    return { ready: groups.size, inserted, updated };
+  }
+
+  async hasFileHash(hash: string): Promise<boolean> {
+    return this.fileHashes.has(hash);
+  }
+
+  async saveFileHash(hash: string): Promise<void> {
+    this.fileHashes.add(hash);
   }
 }
 
@@ -228,15 +272,16 @@ DROP TABLE #actions;
         .input('clicks', sql.BigInt, row.clicks ?? null)
         .input('spend', sql.Decimal(18,4), row.spend ?? null)
         .input('purchases', sql.Int, row.purchases ?? null)
+        .input('value', sql.Decimal(18,4), row.value ?? null)
         .input('roas', sql.Decimal(18,4), row.roas ?? null)
         .input('daysDetected', sql.Int, row.days_detected ?? 0);
       const result = await request.query(`
 CREATE TABLE #actions (action NVARCHAR(10));
 MERGE facts_meta AS target
-USING (SELECT @clientId AS client_id, @date AS [date], @adId AS ad_id, @campaignId AS campaign_id, @adsetId AS adset_id, @impressions AS impressions, @clicks AS clicks, @spend AS spend, @purchases AS purchases, @roas AS roas, @daysDetected AS days_detected) AS source
+USING (SELECT @clientId AS client_id, @date AS [date], @adId AS ad_id, @campaignId AS campaign_id, @adsetId AS adset_id, @impressions AS impressions, @clicks AS clicks, @spend AS spend, @purchases AS purchases, @value AS [value], @roas AS roas, @daysDetected AS days_detected) AS source
 ON (target.client_id = source.client_id AND target.[date] = source.[date] AND ISNULL(target.ad_id,'') = ISNULL(source.ad_id,''))
-WHEN MATCHED THEN UPDATE SET campaign_id = source.campaign_id, adset_id = source.adset_id, impressions = source.impressions, clicks = source.clicks, spend = source.spend, purchases = source.purchases, roas = source.roas, days_detected = source.days_detected
-WHEN NOT MATCHED THEN INSERT (client_id, [date], ad_id, campaign_id, adset_id, impressions, clicks, spend, purchases, roas, days_detected) VALUES (source.client_id, source.[date], source.ad_id, source.campaign_id, source.adset_id, source.impressions, source.clicks, source.spend, source.purchases, source.roas, source.days_detected)
+WHEN MATCHED THEN UPDATE SET campaign_id = source.campaign_id, adset_id = source.adset_id, impressions = source.impressions, clicks = source.clicks, spend = source.spend, purchases = source.purchases, [value]=source.[value], roas = source.roas, days_detected = source.days_detected
+WHEN NOT MATCHED THEN INSERT (client_id, [date], ad_id, campaign_id, adset_id, impressions, clicks, spend, purchases, [value], roas, days_detected) VALUES (source.client_id, source.[date], source.ad_id, source.campaign_id, source.adset_id, source.impressions, source.clicks, source.spend, source.purchases, source.[value], source.roas, source.days_detected)
 OUTPUT $action INTO #actions;
 SELECT action FROM #actions;
 DROP TABLE #actions;
@@ -275,5 +320,73 @@ DROP TABLE #looker;
     const updated = result.recordsets[0][0]?.updated || 0;
     const unmatched: LookerUrlRow[] = result.recordsets[1].map((r: any) => ({ clientId: String(r.client_id), adId: r.ad_id ?? undefined, adNameNorm: r.ad_name_norm ?? undefined }));
     return { updated, unmatched };
+  }
+
+  async bulkInsertStaging(rows: MetaMetricRow[]): Promise<number> {
+    if (!rows.length) return 0;
+    const pool = await this.ensurePool();
+    const table = new sql.Table('_staging_facts');
+    table.columns.add('client_id', sql.UniqueIdentifier, { nullable: false });
+    table.columns.add('date', sql.Date, { nullable: false });
+    table.columns.add('ad_id', sql.BigInt, { nullable: false });
+    table.columns.add('impressions', sql.BigInt, { nullable: true });
+    table.columns.add('clicks', sql.Int, { nullable: true });
+    table.columns.add('spend', sql.Decimal(18,4), { nullable: true });
+    table.columns.add('purchases', sql.Int, { nullable: true });
+    table.columns.add('value', sql.Decimal(18,4), { nullable: true });
+    for (const r of rows) {
+      table.rows.add(r.clientId, r.date, Number(r.adId), r.impressions ?? null, r.clicks ?? null, r.spend ?? null, r.purchases ?? null, r.value ?? null);
+    }
+    await pool.request().bulk(table);
+    return rows.length;
+  }
+
+  async mergeFromStaging(clientId: string): Promise<{ ready: number; inserted: number; updated: number }> {
+    const pool = await this.ensurePool();
+    const result = await pool
+      .request()
+      .input('ClientId', sql.UniqueIdentifier, clientId)
+      .query(`
+DECLARE @out TABLE(action NVARCHAR(10));
+WITH S AS (
+  SELECT client_id,[date],ad_id,
+         SUM(CAST(impressions AS BIGINT)) impressions,
+         SUM(CAST(clicks AS INT)) clicks,
+         SUM(CAST(spend AS DECIMAL(18,4))) spend,
+         SUM(CAST([value] AS DECIMAL(18,4))) [value],
+         SUM(CAST(purchases AS INT)) purchases
+  FROM dbo._staging_facts
+  WHERE client_id=@ClientId
+  GROUP BY client_id,[date],ad_id
+)
+MERGE dbo.facts_meta AS T
+USING S
+ON T.client_id=S.client_id AND T.[date]=S.[date] AND T.ad_id=S.ad_id
+WHEN MATCHED THEN UPDATE SET
+  impressions=S.impressions, clicks=S.clicks, spend=S.spend,
+  purchases=S.purchases, [value]=S.[value],
+  roas=CASE WHEN S.spend>0 THEN S.[value]/S.spend END, updated_at=SYSDATETIME()
+WHEN NOT MATCHED THEN
+  INSERT (client_id,[date],ad_id,impressions,clicks,spend,purchases,[value],roas,created_at)
+  VALUES (S.client_id,S.[date],S.ad_id,S.impressions,S.clicks,S.spend,S.purchases,S.[value],CASE WHEN S.spend>0 THEN S.[value]/S.spend END,SYSDATETIME())
+OUTPUT $action INTO @out;
+SELECT (SELECT COUNT(*) FROM S) AS ready,
+  SUM(CASE WHEN action='INSERT' THEN 1 ELSE 0 END) AS inserted,
+  SUM(CASE WHEN action='UPDATE' THEN 1 ELSE 0 END) AS updated
+FROM @out;
+DELETE FROM dbo._staging_facts WHERE client_id=@ClientId;`);
+    const row = result.recordset[0] || { ready: 0, inserted: 0, updated: 0 };
+    return { ready: row.ready || 0, inserted: row.inserted || 0, updated: row.updated || 0 };
+  }
+
+  async hasFileHash(hash: string): Promise<boolean> {
+    const pool = await this.ensurePool();
+    const r = await pool.request().input('h', sql.NVarChar(64), hash).query('SELECT 1 FROM dbo.processed_files_hashes WHERE file_hash=@h');
+    return r.recordset.length > 0;
+  }
+
+  async saveFileHash(hash: string): Promise<void> {
+    const pool = await this.ensurePool();
+    await pool.request().input('h', sql.NVarChar(64), hash).query('INSERT INTO dbo.processed_files_hashes(file_hash) VALUES(@h)');
   }
 }

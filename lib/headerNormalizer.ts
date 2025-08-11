@@ -8,42 +8,34 @@ export function normHeader(header: string): string {
     .trim()
     .replace(/\s+/g, ' ');
 }
-
-export function dedupeHeaders(headers: string[]): string[] {
-  const seen = new Map<string, number>();
-  return headers.map(h => {
-    let norm = normHeader(h);
-    if (norm === 'compras' && /%/.test(h)) {
-      norm = 'compras_pct';
-    }
-    if (seen.has(norm)) {
-      const count = (seen.get(norm) || 0) + 1;
-      seen.set(norm, count);
-      norm = `${norm}_${count}`;
-    } else {
-      seen.set(norm, 1);
-    }
-    return norm;
-  });
-}
-
 export const HEADER_MAP: Record<string, string> = {
-  'nombre de la campaña': 'campaign_name',
-  'nombre del conjunto de anuncios': 'adset_name',
+  'dia': 'date',
+  'nombre de la cuenta': 'account_name',
   'nombre del anuncio': 'ad_name',
-  dia: 'date',
+  'nombre del conjunto de anuncios': 'adset_name',
+  'nombre de la campana': 'campaign_name',
   'importe gastado eur': 'spend',
-  impresiones: 'impressions',
+  'impresiones': 'impressions',
   'clics todos': 'clicks',
   'cpc todos': 'cpc',
   'cpm costo por mil impresiones': 'cpm',
   'ctr todos': 'ctr',
   'valor de conversion de compras': 'value',
-  compras: 'purchases',
-  'compras_pct': 'purchases_pct',
+  'compras': 'purchases',
+  '% compras': 'purchases_pct',
   'visitas a la pagina de destino': 'lpv',
   'pagos iniciados': 'init_checkout',
-  'nombre de la cuenta': 'account_name',
 };
+export function mapHeaders(headers: string[]): string[] {
+  const seen = new Map<string, number>();
+  return headers.map(h => {
+    const n = normHeader(h);
+    let k = HEADER_MAP[n] ?? n;
+    if (k === 'purchases' && /%/.test(h)) k = 'purchases_pct';
+    const c = (seen.get(k) ?? 0) + 1;
+    seen.set(k, c);
+    return c === 1 ? k : `${k}_${c}`;
+  });
+}
 
-export default { normHeader, dedupeHeaders, HEADER_MAP };
+export default { normHeader, mapHeaders, HEADER_MAP };
