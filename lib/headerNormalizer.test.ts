@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { dedupeHeaders, normHeader } from './headerNormalizer.js';
+import { mapHeaders, normHeader } from './headerNormalizer.js';
 
 describe('headerNormalizer', () => {
   it('normalizes headers', () => {
@@ -7,13 +7,18 @@ describe('headerNormalizer', () => {
     expect(normHeader('CPC (todos)')).toBe('cpc todos');
   });
 
-  it('handles compras vs % compras', () => {
-    const res = dedupeHeaders(['Compras', '% Compras']);
-    expect(res).toEqual(['compras', 'compras_pct']);
+  it('maps and dedupes headers with accents', () => {
+    const res = mapHeaders(['Nombre de la campaña', 'Nombre de la campana']);
+    expect(res).toEqual(['campaign_name', 'campaign_name_2']);
   });
 
-  it('dedupes repeated headers', () => {
-    const res = dedupeHeaders(['foo', 'Foo']);
-    expect(res).toEqual(['foo', 'foo_2']);
+  it('handles compras vs % compras', () => {
+    const res = mapHeaders(['Compras', '% Compras']);
+    expect(res).toEqual(['purchases', 'purchases_pct']);
+  });
+
+  it('dedupes after mapping', () => {
+    const res = mapHeaders(['Compras', 'Compras']);
+    expect(res).toEqual(['purchases', 'purchases_2']);
   });
 });
