@@ -679,25 +679,62 @@ SELECT client_id FROM @out;`);
             clientId = queryResult.recordset[0].client_id;
         }
         const facts = [];
-        for (const r of rows) {
+        const BIGINT_MAX = 9_223_372_036_854_775_807;
+        const INT_MIN = -2_147_483_648;
+        const INT_MAX = 2_147_483_647;
+        const DECIMAL_MAX = 99_999_999_999_999.9999;
+        const isValidBigInt = v => v === null || (Number.isInteger(v) && Math.abs(v) <= BIGINT_MAX);
+        const isValidInt = v => v === null || (Number.isInteger(v) && v >= INT_MIN && v <= INT_MAX);
+        const isValidDecimal = v => v === null || (typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= DECIMAL_MAX);
+        for (let i = 0; i < rows.length; i++) {
+            const r = rows[i];
             const d = parseDateForSort(r['date'] || r['day'] || r['día']);
             if (!d) continue;
             const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())).toISOString().split('T')[0];
             const adName = String(r['ad_name'] || r['Ad name'] || r['ad name'] || '').trim();
             const adId = adName ? adIdFromName(normalizeName(adName)) : null;
+            if (adId && adId.length > 100) {
+                logger.warn(`[SQL][ImportMeta] ad_id too long`, { row: i, length: adId.length });
+                continue;
+            }
             const campaignId = r['campaign_id'] || r['campaign id'] || '';
             const adsetId = r['adset_id'] || r['adset id'] || '';
+            const impressions = parseNumber(r['impressions'] ?? null);
+            const clicks = parseNumber(r['clicks'] ?? null);
+            const spend = parseNumber(r['spend'] ?? r['amount_spent (eur)'] ?? null);
+            const purchases = parseNumber(r['purchases'] ?? null);
+            const purchase_value = parseNumber(r['purchase_value'] ?? r['purchase value'] ?? null);
+            if (!isValidBigInt(impressions)) {
+                logger.warn(`[SQL][ImportMeta] impressions out of range`, { row: i, value: impressions });
+                continue;
+            }
+            if (!isValidBigInt(clicks)) {
+                logger.warn(`[SQL][ImportMeta] clicks out of range`, { row: i, value: clicks });
+                continue;
+            }
+            if (!isValidInt(purchases)) {
+                logger.warn(`[SQL][ImportMeta] purchases out of range`, { row: i, value: purchases });
+                continue;
+            }
+            if (!isValidDecimal(spend)) {
+                logger.warn(`[SQL][ImportMeta] spend out of range`, { row: i, value: spend });
+                continue;
+            }
+            if (!isValidDecimal(purchase_value)) {
+                logger.warn(`[SQL][ImportMeta] purchase_value out of range`, { row: i, value: purchase_value });
+                continue;
+            }
             facts.push({
                 client_id: clientId,
                 date,
                 ad_id: adId,
                 campaign_id: campaignId === '' ? null : campaignId,
                 adset_id: adsetId === '' ? null : adsetId,
-                impressions: parseNumber(r['impressions'] ?? null),
-                clicks: parseNumber(r['clicks'] ?? null),
-                spend: parseNumber(r['spend'] ?? r['amount_spent (eur)'] ?? null),
-                purchases: parseNumber(r['purchases'] ?? null),
-                purchase_value: parseNumber(r['purchase_value'] ?? r['purchase value'] ?? null)
+                impressions,
+                clicks,
+                spend,
+                purchases,
+                purchase_value
             });
         }
 
@@ -725,7 +762,12 @@ SELECT client_id FROM @out;`);
                 throw new Error(`Failed to add row ${i}: ${rowErr.message}`);
             }
         }
-        await sqlPool.request().bulk(table);
+        try {
+            await sqlPool.request().bulk(table);
+        } catch (err) {
+            logger.error(`[SQL][ImportMeta] Bulk insert failed`, { sessionId, rows: facts.length, error: err });
+            return res.status(500).json({ success: false, error: err.message, sessionId });
+        }
 
         const mergeRes = await sqlPool
             .request()
