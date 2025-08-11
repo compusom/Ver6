@@ -907,7 +907,13 @@ END CATCH;`);
 
         const inserted = resRow.inserted || 0;
         const updated = resRow.updated || 0;
-        logger.info(`[SQL][ImportMeta] account="${accountName}" client_id=${clientId} session_id=${sessionId} total_rows=${rows.length} valid=${facts.length} skipped=${skippedRows} inserted=${inserted} updated=${updated}`);
+        const summary =
+            `[SQL][ImportMeta] account="${accountName}" client_id=${clientId} session_id=${sessionId} total_rows=${rows.length} ` +
+            ` valid=${facts.length} skipped=${skippedRows} ` +
+            `missing_date=${missing_date} missing_ad_name=${missing_ad_name} ad_id_too_long=${ad_id_too_long} ` +
+            `invalid_impressions=${invalid_impressions} invalid_clicks=${invalid_clicks} invalid_purchases=${invalid_purchases} ` +
+            `invalid_spend=${invalid_spend} invalid_purchase_value=${invalid_purchase_value} inserted=${inserted} updated=${updated}`;
+        logger.info(summary);
 
         await sqlPool
             .request()
