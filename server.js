@@ -644,8 +644,10 @@ app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
         const sheet = workbook.Sheets[workbook.SheetNames[0]];
         const rows = xlsx.utils.sheet_to_json(sheet, { defval: null });
         if (rows.length === 0) {
+            logger.warn('[SQL][ImportMeta] Excel file is empty');
             return res.status(400).json({ success: false, error: 'Excel file is empty' });
         }
+        logger.info(`[SQL][ImportMeta] loaded ${rows.length} rows from Excel`);
         const first = rows[0];
         const accountName = first['account_name'] || first['Account name'] || first['nombre_de_la_cuenta'] || first['Nombre de la cuenta'] || 'desconocido';
         const nameNorm = normalizeName(accountName);
@@ -679,6 +681,7 @@ SELECT client_id FROM @out;`);
             clientId = queryResult.recordset[0].client_id;
         }
         const facts = [];
+        let skippedRows = 0;
         const BIGINT_MAX = 9_223_372_036_854_775_807;
         const INT_MIN = -2_147_483_648;
         const INT_MAX = 2_147_483_647;
@@ -691,12 +694,16 @@ SELECT client_id FROM @out;`);
             const d = parseDateForSort(
                 r['date'] || r['day'] || r['día'] || r['fecha'] || r['Fecha']
             );
-            if (!d) continue;
+            if (!d) {
+                skippedRows++;
+                continue;
+            }
             const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())).toISOString().split('T')[0];
             const adName = String(r['ad_name'] || r['Ad name'] || r['ad name'] || '').trim();
             const adId = adName ? adIdFromName(normalizeName(adName)) : null;
             if (adId && adId.length > 100) {
                 logger.warn(`[SQL][ImportMeta] ad_id too long`, { row: i, length: adId.length });
+                skippedRows++;
                 continue;
             }
             const campaignId = r['campaign_id'] || r['campaign id'] || '';
@@ -708,22 +715,27 @@ SELECT client_id FROM @out;`);
             const purchase_value = parseNumber(r['purchase_value'] ?? r['purchase value'] ?? null);
             if (!isValidBigInt(impressions)) {
                 logger.warn(`[SQL][ImportMeta] impressions out of range`, { row: i, value: impressions });
+                skippedRows++;
                 continue;
             }
             if (!isValidBigInt(clicks)) {
                 logger.warn(`[SQL][ImportMeta] clicks out of range`, { row: i, value: clicks });
+                skippedRows++;
                 continue;
             }
             if (!isValidInt(purchases)) {
                 logger.warn(`[SQL][ImportMeta] purchases out of range`, { row: i, value: purchases });
+                skippedRows++;
                 continue;
             }
             if (!isValidDecimal(spend)) {
                 logger.warn(`[SQL][ImportMeta] spend out of range`, { row: i, value: spend });
+                skippedRows++;
                 continue;
             }
             if (!isValidDecimal(purchase_value)) {
                 logger.warn(`[SQL][ImportMeta] purchase_value out of range`, { row: i, value: purchase_value });
+                skippedRows++;
                 continue;
             }
             facts.push({
@@ -740,10 +752,15 @@ SELECT client_id FROM @out;`);
             });
         }
 
+        logger.info(`[SQL][ImportMeta] parsed ${rows.length} rows, valid=${facts.length}, skipped=${skippedRows}`);
+
         const sessionId = uuidv4();
 
         const bulkInsertRows = async rows => {
-            if (rows.length === 0) return;
+            if (rows.length === 0) {
+                logger.info(`[SQL][ImportMeta] no rows to bulk insert for session_id=${sessionId}`);
+                return;
+            }
             const table = new sql.Table('_staging_facts');
             table.create = false;
             table.schema = 'dbo';
@@ -769,6 +786,7 @@ SELECT client_id FROM @out;`);
             }
             try {
                 await sqlPool.request().bulk(table);
+                logger.info(`[SQL][ImportMeta] bulk inserted ${rows.length} rows into staging`, { sessionId });
             } catch (err) {
                 if (rows.length === 1) {
                     logger.error(`[SQL][ImportMeta] Bulk insert failed for single row`, { sessionId, row: rows[0], error: err });
@@ -852,7 +870,7 @@ END CATCH;`);
 
         const inserted = resRow.inserted || 0;
         const updated = resRow.updated || 0;
-        logger.info(`[SQL][ImportMeta] account="${accountName}" client_id=${clientId} session_id=${sessionId} inserted=${inserted} updated=${updated}`);
+        logger.info(`[SQL][ImportMeta] account="${accountName}" client_id=${clientId} session_id=${sessionId} total_rows=${rows.length} valid=${facts.length} skipped=${skippedRows} inserted=${inserted} updated=${updated}`);
 
         await sqlPool
             .request()
