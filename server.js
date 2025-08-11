@@ -782,15 +782,6 @@ SELECT client_id FROM @out;`);
 
         await bulkInsertRows(facts);
 
-        }
-        try {
-            await sqlPool.request().bulk(table);
-        } catch (err) {
-            logger.error(`[SQL][ImportMeta] Bulk insert failed`, { sessionId, rows: facts.length, error: err });
-            return res.status(500).json({ success: false, error: err.message, sessionId });
-        }
-
-
         const mergeRes = await sqlPool
             .request()
             .input('P_session_id', sql.UniqueIdentifier, sessionId)
