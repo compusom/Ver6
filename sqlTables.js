@@ -180,6 +180,35 @@ export const TABLES = {
     `,
     dependencies: ['clientes']
   },
+  processed_files_hashes: {
+    create: `
+        CREATE TABLE processed_files_hashes (
+            id BIGINT IDENTITY(1,1) PRIMARY KEY,
+            file_hash NVARCHAR(128) NOT NULL,
+            created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+        )
+    `,
+    dependencies: []
+  },
+  _staging_facts: {
+    create: `
+        CREATE TABLE _staging_facts (
+            session_id UNIQUEIDENTIFIER NOT NULL,
+            client_id UNIQUEIDENTIFIER NOT NULL,
+            [date] DATE NOT NULL,
+            ad_id NVARCHAR(100),
+            campaign_id NVARCHAR(100),
+            adset_id NVARCHAR(100),
+            impressions BIGINT,
+            clicks BIGINT,
+            spend DECIMAL(18,4),
+            purchases INT,
+            purchase_value DECIMAL(18,4),
+            created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+        )
+    `,
+    dependencies: []
+  },
   import_history: {
     create: `
         CREATE TABLE import_history (
