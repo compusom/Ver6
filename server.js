@@ -681,7 +681,16 @@ SELECT client_id FROM @out;`);
             clientId = queryResult.recordset[0].client_id;
         }
         const facts = [];
-        let skippedRows = 0;
+        // Counters for different skip reasons
+        let missing_date = 0;
+        let missing_ad_name = 0;
+        let ad_id_too_long = 0;
+        let invalid_impressions = 0;
+        let invalid_clicks = 0;
+        let invalid_purchases = 0;
+        let invalid_spend = 0;
+        let invalid_purchase_value = 0;
+        const examples = {};
         const BIGINT_MAX = 9_223_372_036_854_775_807;
         const INT_MIN = -2_147_483_648;
         const INT_MAX = 2_147_483_647;
@@ -695,15 +704,22 @@ SELECT client_id FROM @out;`);
                 r['date'] || r['day'] || r['día'] || r['fecha'] || r['Fecha']
             );
             if (!d) {
-                skippedRows++;
+                missing_date++;
+                examples.missing_date ??= r;
                 continue;
             }
             const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())).toISOString().split('T')[0];
             const adName = String(r['ad_name'] || r['Ad name'] || r['ad name'] || '').trim();
-            const adId = adName ? adIdFromName(normalizeName(adName)) : null;
+            if (!adName) {
+                missing_ad_name++;
+                examples.missing_ad_name ??= r;
+                continue;
+            }
+            const adId = adIdFromName(normalizeName(adName));
             if (adId && adId.length > 100) {
                 logger.warn(`[SQL][ImportMeta] ad_id too long`, { row: i, length: adId.length });
-                skippedRows++;
+                ad_id_too_long++;
+                examples.ad_id_too_long ??= r;
                 continue;
             }
             const campaignId = r['campaign_id'] || r['campaign id'] || '';
@@ -715,27 +731,32 @@ SELECT client_id FROM @out;`);
             const purchase_value = parseNumber(r['purchase_value'] ?? r['purchase value'] ?? null);
             if (!isValidBigInt(impressions)) {
                 logger.warn(`[SQL][ImportMeta] impressions out of range`, { row: i, value: impressions });
-                skippedRows++;
+                invalid_impressions++;
+                examples.invalid_impressions ??= r;
                 continue;
             }
             if (!isValidBigInt(clicks)) {
                 logger.warn(`[SQL][ImportMeta] clicks out of range`, { row: i, value: clicks });
-                skippedRows++;
+                invalid_clicks++;
+                examples.invalid_clicks ??= r;
                 continue;
             }
             if (!isValidInt(purchases)) {
                 logger.warn(`[SQL][ImportMeta] purchases out of range`, { row: i, value: purchases });
-                skippedRows++;
+                invalid_purchases++;
+                examples.invalid_purchases ??= r;
                 continue;
             }
             if (!isValidDecimal(spend)) {
                 logger.warn(`[SQL][ImportMeta] spend out of range`, { row: i, value: spend });
-                skippedRows++;
+                invalid_spend++;
+                examples.invalid_spend ??= r;
                 continue;
             }
             if (!isValidDecimal(purchase_value)) {
                 logger.warn(`[SQL][ImportMeta] purchase_value out of range`, { row: i, value: purchase_value });
-                skippedRows++;
+                invalid_purchase_value++;
+                examples.invalid_purchase_value ??= r;
                 continue;
             }
             facts.push({
@@ -752,7 +773,23 @@ SELECT client_id FROM @out;`);
             });
         }
 
-        logger.info(`[SQL][ImportMeta] parsed ${rows.length} rows, valid=${facts.length}, skipped=${skippedRows}`);
+        const skippedRows =
+            missing_date +
+            missing_ad_name +
+            ad_id_too_long +
+            invalid_impressions +
+            invalid_clicks +
+            invalid_purchases +
+            invalid_spend +
+            invalid_purchase_value;
+        logger.info(
+            `[SQL][ImportMeta] parsed ${rows.length} valid=${facts.length} ` +
+                `missing_date=${missing_date} missing_ad_name=${missing_ad_name} ` +
+                `ad_id_too_long=${ad_id_too_long} invalid_impressions=${invalid_impressions} ` +
+                `invalid_clicks=${invalid_clicks} invalid_purchases=${invalid_purchases} ` +
+                `invalid_spend=${invalid_spend} invalid_purchase_value=${invalid_purchase_value}`
+        );
+        logger.debug('Examples of skipped rows', examples);
 
         const sessionId = uuidv4();
 
@@ -878,7 +915,20 @@ END CATCH;`);
             .input('batch_data', sql.NVarChar(sql.MAX), JSON.stringify({ id: crypto.randomUUID(), timestamp: new Date().toISOString(), source: 'sql', fileName: req.file.originalname, accountName, nameNorm, summary: { inserted, updated } }))
             .query('INSERT INTO import_history (source, batch_data) VALUES (@source, @batch_data)');
 
-        res.json({ inserted, updated, sessionId });
+        res.json({
+            inserted,
+            updated,
+            sessionId,
+            skipped: skippedRows,
+            missing_date,
+            missing_ad_name,
+            ad_id_too_long,
+            invalid_impressions,
+            invalid_clicks,
+            invalid_purchases,
+            invalid_spend,
+            invalid_purchase_value
+        });
     } catch (err) {
         logger.error('[SQL] Error importing Excel:', err);
         res.status(500).json({ success: false, error: err.message });
