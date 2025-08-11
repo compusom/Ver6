@@ -992,6 +992,77 @@ app.get('/api/sql/diagnostics', async (req, res) => {
     }
 });
 
+// --- SQL data retrieval endpoints ---
+
+// Fetch clients from connected SQL Server
+app.get('/api/sql/clients', async (req, res) => {
+    if (!sqlPool) {
+        return res.status(400).json({ success: false, error: 'Not connected' });
+    }
+    try {
+        const result = await sqlPool
+            .request()
+            .query('SELECT client_id, name, name_norm FROM dbo.clients ORDER BY name');
+        const clients = result.recordset.map(row => ({
+            id: row.client_id,
+            name: row.name,
+            nameNorm: row.name_norm
+        }));
+        res.json({ success: true, data: clients, count: clients.length });
+    } catch (error) {
+        logger.error('[SQL] Error loading clients:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Fetch performance data grouped by client from SQL Server
+app.get('/api/sql/performance', async (req, res) => {
+    if (!sqlPool) {
+        return res.status(400).json({ success: false, error: 'Not connected' });
+    }
+    try {
+        const result = await sqlPool
+            .request()
+            .query('SELECT client_id, [date], ad_id, campaign_id, adset_id, impressions, clicks, spend, purchases, roas FROM dbo.facts_meta');
+
+        const data = {};
+        result.recordset.forEach(row => {
+            const cid = row.client_id;
+            if (!data[cid]) data[cid] = [];
+            data[cid].push({
+                clientId: cid,
+                uniqueId: `${row.date?.toISOString?.().slice(0,10) || row.date}_${row.ad_id || ''}`,
+                campaignName: row.campaign_id || '',
+                adSetName: row.adset_id || '',
+                adName: row.ad_id || '',
+                day: row.date ? row.date.toISOString().slice(0,10) : '',
+                age: '',
+                gender: '',
+                spend: Number(row.spend) || 0,
+                campaignDelivery: '',
+                adSetDelivery: '',
+                adDelivery: '',
+                impressions: Number(row.impressions) || 0,
+                reach: 0,
+                frequency: 0,
+                purchases: Number(row.purchases) || 0,
+                landingPageViews: 0,
+                clicksAll: Number(row.clicks) || 0,
+                cpm: 0,
+                ctrAll: 0,
+                cpcAll: 0,
+                videoPlays3s: 0,
+                checkoutsInitiated: 0
+            });
+        });
+
+        res.json({ success: true, data });
+    } catch (error) {
+        logger.error('[SQL] Error loading performance:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 app.post('/api/sql/cleanup-staging', async (req, res) => {
     if (!sqlPool) {
         return res.status(400).json({ ok: false, error: 'Not connected' });
