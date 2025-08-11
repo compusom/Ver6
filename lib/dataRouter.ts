@@ -14,8 +14,13 @@ const fetchJson = async (url: string) => {
 
 const normalizeClients = (data: any): Client[] => {
   if (Array.isArray(data)) return data;
-  if (data && Array.isArray(data?.data)) return data.data;
-  return Object.values(data || {});
+  if (Array.isArray(data?.data)) return data.data;
+  if (Array.isArray(data?.clients)) return data.clients;
+  if (data && typeof data === 'object') {
+    return Object.values(data).filter(v => typeof v === 'object');
+  }
+  Logger.warn('[FETCH] clients response not array, defaulting to empty');
+  return [];
 };
 
 const flattenRows = (value: any): PerformanceRecord[] => {
@@ -35,13 +40,24 @@ const normalizePerformance = (raw: any): Record<string, PerformanceRecord[]> => 
   const data = raw?.data ?? raw;
   if (Array.isArray(data)) {
     const rows = flattenRows(data);
-    result['default'] = rows;
-    total += rows.length;
+    if (rows.length > 0) {
+      result['default'] = rows;
+      total += rows.length;
+    }
   } else if (data && typeof data === 'object') {
     for (const [key, value] of Object.entries(data)) {
       const rows = flattenRows(value);
       result[key] = rows;
       total += rows.length;
+    }
+  }
+  if (result.default && Object.keys(result).length > 1) {
+    delete result.default;
+  }
+  for (const key of Object.keys(result)) {
+    if (!Array.isArray(result[key])) {
+      Logger.warn(`[FETCH] performanceData[${key}] invalid, converting to empty array`);
+      result[key] = [];
     }
   }
   Logger.info(`[FETCH] performance flattened rows=${total}`);
