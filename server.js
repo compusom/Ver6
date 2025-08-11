@@ -688,7 +688,9 @@ SELECT client_id FROM @out;`);
         const isValidDecimal = v => v === null || (typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= DECIMAL_MAX);
         for (let i = 0; i < rows.length; i++) {
             const r = rows[i];
-            const d = parseDateForSort(r['date'] || r['day'] || r['día']);
+            const d = parseDateForSort(
+                r['date'] || r['day'] || r['día'] || r['fecha'] || r['Fecha']
+            );
             if (!d) continue;
             const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())).toISOString().split('T')[0];
             const adName = String(r['ad_name'] || r['Ad name'] || r['ad name'] || '').trim();
