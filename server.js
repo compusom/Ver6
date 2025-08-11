@@ -816,7 +816,7 @@ app.get('/api/sql/import-history', async (req, res) => {
     }
     try {
         const result = await sqlPool.request().query(`
-SELECT id, source, COALESCE(batch_data, payload) AS batch_data, created_at
+SELECT id, source, batch_data, created_at
 FROM dbo.import_history
 ORDER BY id DESC;
         `);
