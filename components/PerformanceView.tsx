@@ -80,6 +80,19 @@ const parseDate = (dateString: string): Date | null => {
     return isNaN(date.getTime()) ? null : date;
 }
 
+const formatCurrency = (value: number, currency?: string) => {
+    const code = currency || 'USD';
+    if (!currency) {
+        Logger.warn(`[PerformanceView] Missing currency for value ${value}, defaulting to ${code}`);
+    }
+    try {
+        return value.toLocaleString('es-ES', { style: 'currency', currency: code });
+    } catch (e) {
+        Logger.warn(`[PerformanceView] Currency format failed for ${currency}, using USD`);
+        return value.toLocaleString('es-ES', { style: 'currency', currency: 'USD' });
+    }
+};
+
 interface PerformanceViewProps {
     clients: Client[]; 
     getPerformanceAnalysis: (data: AggregatedAdPerformance[], client: Client) => Promise<string>;
@@ -566,7 +579,7 @@ export const PerformanceView: React.FC<PerformanceViewProps> = ({ clients, getPe
                             </div>
                             <div className="w-full grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
                                 <div className="text-brand-text-secondary">Gasto Total:</div>
-                                <div className="font-semibold text-brand-text text-right">{client.gastoTotal.toLocaleString('es-ES', { style: 'currency', currency: client.currency })}</div>
+                                <div className="font-semibold text-brand-text text-right">{formatCurrency(client.gastoTotal, client.currency)}</div>
                                 <div className="text-brand-text-secondary">ROAS:</div>
                                 <div className="font-semibold text-brand-text text-right">{client.roas.toFixed(2)}</div>
                                 <div className="text-brand-text-secondary">Anuncios:</div>

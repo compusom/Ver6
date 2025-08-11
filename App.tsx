@@ -299,12 +299,15 @@ const App: React.FC = () => {
 
     const refreshClients = useCallback(async () => {
         const loaded = await getClients(dataSource);
-        setClients(loaded);
+        setClients(Array.isArray(loaded) ? loaded : []);
     }, [dataSource]);
 
     const refreshPerformance = useCallback(async () => {
         const loaded = await getPerformance(dataSource);
-        setPerformanceData(loaded);
+        const entries = Object.entries(loaded).filter(([_, v]) => Array.isArray(v));
+        const hasNamed = entries.some(([k]) => k !== 'default');
+        const filtered = entries.filter(([k]) => (hasNamed ? k !== 'default' : true));
+        setPerformanceData(Object.fromEntries(filtered));
     }, [dataSource]);
 
     useEffect(() => {
