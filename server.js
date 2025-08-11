@@ -739,35 +739,47 @@ SELECT client_id FROM @out;`);
         }
 
         const sessionId = uuidv4();
-        const table = new sql.Table('_staging_facts');
-        table.create = false;
-        table.schema = 'dbo';
-        table.columns.add('session_id', sql.UniqueIdentifier, { nullable: false });
-        table.columns.add('client_id', sql.UniqueIdentifier, { nullable: false });
-        table.columns.add('date', sql.Date, { nullable: false });
-        table.columns.add('ad_id', sql.NVarChar(100), { nullable: true });
-        table.columns.add('campaign_id', sql.NVarChar(100), { nullable: true });
-        table.columns.add('adset_id', sql.NVarChar(100), { nullable: true });
-        table.columns.add('impressions', sql.BigInt, { nullable: true });
-        table.columns.add('clicks', sql.BigInt, { nullable: true });
-        table.columns.add('spend', sql.Decimal(18,4), { nullable: true });
-        table.columns.add('purchases', sql.Int, { nullable: true });
-        table.columns.add('purchase_value', sql.Decimal(18,4), { nullable: true });
-        for (let i = 0; i < facts.length; i++) {
-            const f = facts[i];
-            try {
-                table.rows.add(sessionId, f.client_id, f.date, f.ad_id, f.campaign_id, f.adset_id, f.impressions, f.clicks, f.spend, f.purchases, f.purchase_value);
-            } catch (rowErr) {
-                logger.error(`[SQL][ImportMeta] Error adding row ${i}`, { row: f, error: rowErr });
-                throw new Error(`Failed to add row ${i}: ${rowErr.message}`);
+
+        const bulkInsertRows = async rows => {
+            if (rows.length === 0) return;
+            const table = new sql.Table('_staging_facts');
+            table.create = false;
+            table.schema = 'dbo';
+            table.columns.add('session_id', sql.UniqueIdentifier, { nullable: false });
+            table.columns.add('client_id', sql.UniqueIdentifier, { nullable: false });
+            table.columns.add('date', sql.Date, { nullable: false });
+            table.columns.add('ad_id', sql.NVarChar(100), { nullable: true });
+            table.columns.add('campaign_id', sql.NVarChar(100), { nullable: true });
+            table.columns.add('adset_id', sql.NVarChar(100), { nullable: true });
+            table.columns.add('impressions', sql.BigInt, { nullable: true });
+            table.columns.add('clicks', sql.BigInt, { nullable: true });
+            table.columns.add('spend', sql.Decimal(18,4), { nullable: true });
+            table.columns.add('purchases', sql.Int, { nullable: true });
+            table.columns.add('purchase_value', sql.Decimal(18,4), { nullable: true });
+            for (let i = 0; i < rows.length; i++) {
+                const f = rows[i];
+                try {
+                    table.rows.add(sessionId, f.client_id, f.date, f.ad_id, f.campaign_id, f.adset_id, f.impressions, f.clicks, f.spend, f.purchases, f.purchase_value);
+                } catch (rowErr) {
+                    logger.error(`[SQL][ImportMeta] Error adding row ${i}`, { row: f, error: rowErr });
+                    throw new Error(`Failed to add row ${i}: ${rowErr.message}`);
+                }
             }
-        }
-        try {
-            await sqlPool.request().bulk(table);
-        } catch (err) {
-            logger.error(`[SQL][ImportMeta] Bulk insert failed`, { sessionId, rows: facts.length, error: err });
-            return res.status(500).json({ success: false, error: err.message, sessionId });
-        }
+            try {
+                await sqlPool.request().bulk(table);
+            } catch (err) {
+                if (rows.length === 1) {
+                    logger.error(`[SQL][ImportMeta] Bulk insert failed for single row`, { sessionId, row: rows[0], error: err });
+                    return; // skip problematic row
+                }
+                const mid = Math.floor(rows.length / 2);
+                logger.warn(`[SQL][ImportMeta] Bulk insert failed, retrying in smaller batches`, { sessionId, rows: rows.length, error: err });
+                await bulkInsertRows(rows.slice(0, mid));
+                await bulkInsertRows(rows.slice(mid));
+            }
+        };
+
+        await bulkInsertRows(facts);
 
         const mergeRes = await sqlPool
             .request()
