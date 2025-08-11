@@ -145,7 +145,7 @@ async function ensureSchema(pool) {
 BEGIN TRY
   BEGIN TRAN;
 
-  -- import_history con batch_data (no renombrar payload; migrar si existe)
+  -- import_history con batch_data
   IF OBJECT_ID('dbo.import_history','U') IS NULL
   BEGIN
     CREATE TABLE dbo.import_history(
@@ -159,12 +159,6 @@ BEGIN TRY
   BEGIN
     IF COL_LENGTH('dbo.import_history','batch_data') IS NULL
       ALTER TABLE dbo.import_history ADD batch_data NVARCHAR(MAX) NULL;
-
-    IF COL_LENGTH('dbo.import_history','payload') IS NOT NULL
-      UPDATE ih
-        SET ih.batch_data = COALESCE(NULLIF(ih.batch_data,''), ih.payload)
-      FROM dbo.import_history ih
-      WHERE (ih.batch_data IS NULL OR ih.batch_data='') AND ih.payload IS NOT NULL;
   END
 
   -- clients (GUID + UQ nombre normalizado)
