@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { dedupeHeaders, normalize } from './headerNormalizer.js';
+import { dedupeHeaders, normHeader } from './headerNormalizer.js';
 
 describe('headerNormalizer', () => {
   it('normalizes headers', () => {
-    expect(normalize('Impresiones')).toBe('impresiones');
-    expect(normalize('CPC (todos)')).toBe('cpc_todos');
+    expect(normHeader('Impresiones')).toBe('impresiones');
+    expect(normHeader('CPC (todos)')).toBe('cpc todos');
   });
 
   it('handles compras vs % compras', () => {

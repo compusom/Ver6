@@ -36,6 +36,8 @@ Para verificar el nuevo flujo de importación de reportes de Meta:
 2. Caso 1: si el `account_name` no existe, al importar se crea un nuevo cliente y se insertan las métricas.
 3. Caso 2: si el cliente ya existe, se actualizan o insertan métricas sin duplicados gracias al índice `(client_id,date,ad_id)`.
 4. Reimportar el mismo archivo no debe generar filas duplicadas; el log mostrará conteos de filas insertadas y actualizadas.
+
+El importador acepta ahora cabeceras en español como "Día" o "Nombre del anuncio" y, si falta el `ad_id`, genera uno sintético a partir de los nombres de cuenta, campaña, conjunto y anuncio.
 ### Cómo ejecutar importación de Meta
 
 Desde la línea de comandos:

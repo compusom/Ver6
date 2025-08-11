@@ -20,13 +20,13 @@ export function toDateISO(val: any): string | null {
 
 export function toNumberES(val: any): number | null {
   if (val === null || val === undefined || val === '') return null;
-  if (typeof val === 'number') return val;
+  if (typeof val === 'number') return isFinite(val) ? val : null;
   const cleaned = String(val)
     .replace(/[\s€$]/g, '')
     .replace(/\./g, '')
     .replace(/,/g, '.');
   const num = parseFloat(cleaned);
-  return isNaN(num) ? null : num;
+  return isFinite(num) ? num : null;
 }
 
 export function toPct(val: any): number | null {
