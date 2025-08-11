@@ -777,9 +777,19 @@ SELECT client_id FROM @out;`);
                 await bulkInsertRows(rows.slice(0, mid));
                 await bulkInsertRows(rows.slice(mid));
             }
+
         };
 
         await bulkInsertRows(facts);
+
+        }
+        try {
+            await sqlPool.request().bulk(table);
+        } catch (err) {
+            logger.error(`[SQL][ImportMeta] Bulk insert failed`, { sessionId, rows: facts.length, error: err });
+            return res.status(500).json({ success: false, error: err.message, sessionId });
+        }
+
 
         const mergeRes = await sqlPool
             .request()
