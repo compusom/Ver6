@@ -401,6 +401,35 @@ app.get('/api/sql/status', async (req, res) => {
     }
 });
 
+// Get clients from SQL Server
+app.get('/api/sql/clients', async (req, res) => {
+    logger.info('[DEBUG] /api/sql/clients endpoint called');
+    if (!sqlPool) {
+        logger.info('[DEBUG] sqlPool is null, not connected to SQL Server');
+        return res.status(400).json({ success: false, error: 'Not connected to SQL Server' });
+    }
+    try {
+        logger.info('[DEBUG] Querying clients from SQL Server...');
+        const result = await sqlPool.request().query(`
+            SELECT client_id, name, name_norm
+            FROM dbo.clients
+            ORDER BY name
+        `);
+        const clients = result.recordset.map(row => ({
+            id: row.client_id,
+            name: row.name,
+            logo: `https://avatar.vercel.sh/${encodeURIComponent(row.name)}.png?text=${row.name.charAt(0).toUpperCase()}`,
+            currency: "EUR", // Default currency for SQL clients
+            metaAccountName: row.name
+        }));
+        logger.info('[DEBUG] Found clients:', clients.length);
+        res.json({ success: true, data: clients, count: clients.length });
+    } catch (error) {
+        logger.error('[SQL] Error al consultar clients:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 app.get('/api/sql/permissions', async (req, res) => {
     if (!sqlPool) {
         return res.status(400).json({ error: 'Not connected' });
@@ -596,11 +625,98 @@ app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
     logger.info(`[SQL] File path: ${req.file.path}`);
     logger.info(`[SQL] Allow create client: ${allowCreateClient}`);
     
-    // Ensure tables exist before importing
+    // Ensure tables exist before importing - use modern schema
     logger.info(`[SQL] Step 1: Ensuring SQL tables exist...`);
     try {
-        const tableResult = await ensureSqlTables();
-        logger.info(`[SQL] ✅ Tables ensured successfully:`, tableResult);
+        // Use the complete SQL schema from ensure-schema endpoint
+        const schemaSql = `
+SET NOCOUNT ON;
+DECLARE @actions TABLE(step NVARCHAR(100), detail NVARCHAR(4000), status NVARCHAR(50), rows INT NULL);
+
+DECLARE @clients_client_id_type NVARCHAR(128);
+DECLARE @facts_client_id_type   NVARCHAR(128);
+
+SELECT @clients_client_id_type = TY.name
+FROM sys.columns C
+JOIN sys.types TY ON TY.user_type_id = C.user_type_id
+WHERE C.object_id = OBJECT_ID('dbo.clients') AND C.name = 'client_id';
+
+SELECT @facts_client_id_type = TY.name
+FROM sys.columns C
+JOIN sys.types TY ON TY.user_type_id = C.user_type_id
+WHERE C.object_id = OBJECT_ID('dbo.facts_meta') AND C.name = 'client_id';
+
+IF OBJECT_ID('dbo.clients','U') IS NULL
+BEGIN
+  CREATE TABLE dbo.clients(
+    client_id UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID(),
+    name NVARCHAR(255) NOT NULL,
+    name_norm NVARCHAR(255) NOT NULL,
+    created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT PK_clients PRIMARY KEY (client_id)
+  );
+  INSERT INTO @actions VALUES('create-table','clients','ok',NULL);
+  SET @clients_client_id_type = 'uniqueidentifier';
+END;
+
+IF COL_LENGTH('dbo.clients','client_id') IS NULL AND COL_LENGTH('dbo.clients','id') IS NOT NULL
+BEGIN
+  EXEC sp_rename 'dbo.clients.id', 'client_id', 'COLUMN';
+  INSERT INTO @actions VALUES('rename-column','clients.id -> clients.client_id','ok',NULL);
+  SET @clients_client_id_type = NULL;
+END;
+
+SELECT @clients_client_id_type = TY.name
+FROM sys.columns C
+JOIN sys.types TY ON TY.user_type_id = C.user_type_id
+WHERE C.object_id = OBJECT_ID('dbo.clients') AND C.name = 'client_id';
+
+IF @clients_client_id_type IS NOT NULL AND @clients_client_id_type <> 'uniqueidentifier'
+BEGIN
+  IF COL_LENGTH('dbo.clients','client_id_uid') IS NULL
+    ALTER TABLE dbo.clients ADD client_id_uid UNIQUEIDENTIFIER NULL;
+  UPDATE dbo.clients SET client_id_uid = ISNULL(client_id_uid, NEWID());
+  DECLARE @pk_clients sysname;
+  SELECT @pk_clients = kc.name
+  FROM sys.key_constraints kc
+  WHERE kc.parent_object_id = OBJECT_ID('dbo.clients') AND kc.type='PK';
+  IF @pk_clients IS NOT NULL
+  BEGIN
+    DECLARE @sql NVARCHAR(MAX) = N'ALTER TABLE dbo.clients DROP CONSTRAINT ['+@pk_clients+N']';
+    EXEC sp_executesql @sql;
+  END
+  ALTER TABLE dbo.clients ADD CONSTRAINT PK_clients PRIMARY KEY (client_id_uid);
+  EXEC sp_rename 'dbo.clients.client_id', 'client_id_int', 'COLUMN';
+  EXEC sp_rename 'dbo.clients.client_id_uid', 'client_id', 'COLUMN';
+  INSERT INTO @actions VALUES('migrate-type','clients.client_id int -> uniqueidentifier','ok',NULL);
+  IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='UQ_clients_name_norm' AND object_id=OBJECT_ID('dbo.clients'))
+    CREATE UNIQUE INDEX UQ_clients_name_norm ON dbo.clients(name_norm);
+END
+ELSE
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='UQ_clients_name_norm' AND object_id=OBJECT_ID('dbo.clients'))
+    CREATE UNIQUE INDEX UQ_clients_name_norm ON dbo.clients(name_norm);
+END;
+
+-- Ensure name_norm column exists
+IF COL_LENGTH('dbo.clients', 'name_norm') IS NULL
+BEGIN
+    ALTER TABLE dbo.clients ADD name_norm NVARCHAR(255) NOT NULL DEFAULT '';
+    INSERT INTO @actions VALUES('add-column','clients.name_norm','ok',NULL);
+END;
+
+-- Create unassigned client if not exists
+IF NOT EXISTS (SELECT 1 FROM dbo.clients WHERE name_norm = N'unassigned')
+BEGIN
+    INSERT INTO dbo.clients (client_id, name, name_norm) VALUES (NEWID(), N'Unassigned', N'unassigned');
+    INSERT INTO @actions VALUES('create-default-client','Unassigned','ok',1);
+END;
+
+SELECT step, detail, status, rows FROM @actions ORDER BY step;
+`;
+        
+        const result = await sqlPool.request().query(schemaSql);
+        logger.info(`[SQL] ✅ Tables ensured successfully:`, { created: [], altered: [] });
     } catch (tableError) {
         logger.error(`[SQL] ❌ Table initialization failed:`, tableError);
         logger.error(`[SQL] Error details:`, tableError.message);
