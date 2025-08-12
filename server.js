@@ -1017,8 +1017,8 @@ app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
         await sqlPool
             .request()
             .input('source', sql.VarChar(50), 'meta-excel')
-            .input('payload', sql.NVarChar(sql.MAX), JSON.stringify(history))
-            .query('INSERT INTO import_history (source, payload) VALUES (@source, @payload)');
+            .input('batch_data', sql.NVarChar(sql.MAX), JSON.stringify(history))
+            .query('INSERT INTO import_history (source, batch_data) VALUES (@source, @batch_data)');
 
         res.json({ success: true, inserted, updated, skipped, clientName, periodStart, periodEnd });
     } catch (error) {
@@ -1041,8 +1041,8 @@ app.get('/api/sql/import-history', async (req, res) => {
         return res.status(400).json({ success: false, error: 'Not connected' });
     }
     try {
-    const result = await sqlPool.request().query('SELECT payload FROM import_history ORDER BY created_at DESC');
-    const history = result.recordset.map(r => JSON.parse(r.payload));
+    const result = await sqlPool.request().query('SELECT batch_data FROM import_history ORDER BY created_at DESC');
+    const history = result.recordset.map(r => JSON.parse(r.batch_data));
         res.json({ success: true, history });
     } catch (error) {
         logger.error('[Server] Error loading SQL import history:', error);
