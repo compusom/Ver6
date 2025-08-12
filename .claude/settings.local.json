@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc:*)",
+      "Bash(npm run test:*)",
+      "Bash(npm ls:*)",
+      "Bash(npm install)",
+      "Bash(npm run dev:*)",
+      "Bash(npm run server:*)",
+      "Bash(npm run start:*)",
+      "Bash(npm start)",
+      "Bash(node server.js)",
+      "Bash(taskkill:*)",
+      "Bash(git rebase:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

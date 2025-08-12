@@ -93,7 +93,12 @@ export const DataDiagnosticsModal: React.FC<DataDiagnosticsModalProps> = ({
     };
 
     const totalPerformanceRecords = Object.values(performanceData).flat().length;
-    const totalLookerRecords = Object.values(lookerData).reduce((acc, clientData) => acc + Object.keys(clientData).length, 0);
+    const totalLookerRecords = Object.values(lookerData).reduce((acc: number, clientData) => {
+        if (typeof clientData === 'object' && clientData !== null) {
+            return acc + Object.keys(clientData).length;
+        }
+        return acc;
+    }, 0);
 
     return (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -234,11 +239,11 @@ export const DataDiagnosticsModal: React.FC<DataDiagnosticsModalProps> = ({
                                             {key.replace('db_', '')}
                                         </div>
                                         <div className="text-xs text-brand-text-secondary">
-                                            {info.error ? info.error : `${info.type} - ${info.length} items`}
+                                            {(info as LocalStorageInfo).error ? (info as LocalStorageInfo).error : `${(info as LocalStorageInfo).type} - ${(info as LocalStorageInfo).length} items`}
                                         </div>
                                     </div>
                                     <div className="text-xs text-brand-text-secondary">
-                                        {formatBytes(info.size)}
+                                        {formatBytes((info as LocalStorageInfo).size)}
                                     </div>
                                 </div>
                             ))}
@@ -260,9 +265,9 @@ export const DataDiagnosticsModal: React.FC<DataDiagnosticsModalProps> = ({
                                                 {client?.name || 'Cliente desconocido'}
                                             </div>
                                             <div className="text-xs text-brand-text-secondary">
-                                                {hashes.length} archivos procesados
+                                                {Array.isArray(hashes) ? hashes.length : 0} archivos procesados
                                             </div>
-                                            {hashes.length > 0 && (
+                                            {Array.isArray(hashes) && hashes.length > 0 && (
                                                 <div className="mt-1 text-xs text-brand-text-secondary break-all">
                                                     Último: {hashes[hashes.length - 1].substring(0, 16)}...
                                                 </div>

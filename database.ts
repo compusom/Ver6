@@ -98,7 +98,7 @@ const db = {
         Logger.info(`[DB] Executing: SELECT * FROM ${table}`);
         
         // Critical authentication data from localStorage ONLY
-        if (CRITICAL_TABLES.includes(table)) {
+        if (CRITICAL_TABLES.includes(table as typeof CRITICAL_TABLES[number])) {
             try {
                 const localData = localStorage.getItem(`db_${table}`);
                 if (localData) {
@@ -187,7 +187,7 @@ const db = {
         Logger.info(`[DB] Data size: ${JSON.stringify(data).length} characters`);
 
         // Critical authentication data stays in localStorage for immediate access
-        if (CRITICAL_TABLES.includes(table)) {
+        if (CRITICAL_TABLES.includes(table as typeof CRITICAL_TABLES[number])) {
             try {
                 const dataString = JSON.stringify(data);
                 localStorage.setItem(`db_${table}`, dataString);
@@ -201,14 +201,34 @@ const db = {
             }
         }
 
-        // Try to save to local server first (if available)
-        // REACTIVATED with better empty data detection
+        // Try to save to local server first (if available) using dedicated endpoints
         if (dbConnectionStatus.serverAvailable && !this.isEmptyData(data)) {
             try {
-                const success = await localServerClient.saveData(table, data);
-                if (success) {
+                let savedToServer = false;
+
+                if (table === 'clients') {
+                    // Prefer dedicated clients endpoint
+                    savedToServer = await localServerClient.saveClients(Array.isArray(data) ? data : [data]);
+                } else if (table === 'performance_data') {
+                    // Send per-client batches to dedicated performance endpoint
+                    const entries = Object.entries(data as { [key: string]: PerformanceRecord[] });
+                    let total = 0;
+                    for (const [clientId, records] of entries) {
+                        if (Array.isArray(records) && records.length > 0) {
+                            const batchId = `batch_${Date.now()}_${clientId}`;
+                            const ok = await localServerClient.savePerformanceRecords(clientId, records, batchId);
+                            if (ok) total += records.length;
+                        }
+                    }
+                    savedToServer = total > 0;
+                } else {
+                    // Generic save for other tables
+                    savedToServer = await localServerClient.saveData(table, data);
+                }
+
+                if (savedToServer) {
                     Logger.info(`[DB] ✅ Saved ${table} to local server`);
-                    
+
                     // Also save to IndexedDB as backup for important data
                     if (['clients', 'performance_data', 'looker_data'].includes(table)) {
                         try {

@@ -367,7 +367,7 @@ export const processPerformanceData = async (
             Object.keys(columnMap).forEach(header => {
                 const mappedKey = columnMap[header];
                 if (mappedKey) {
-                    record[mappedKey] = originalRow[header];
+                    (record as any)[mappedKey] = originalRow[header];
                 }
             });
             

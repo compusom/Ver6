@@ -22,11 +22,9 @@ import fs from 'fs';
 import sql from 'mssql';
 import xlsx from 'xlsx';
 import crypto from 'crypto';
-import { v4 as uuidv4 } from 'uuid';
 import logger from './serverLogger.js';
 import { SQL_TABLE_DEFINITIONS, getCreationOrder, getDeletionOrder } from './sqlTables.js';
 import { parseDateForSort } from './lib/parseDateForSort.js';
-import adIdFromName from './lib/adIdFromName.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -46,19 +44,6 @@ const TABLE_CREATION_ORDER = getCreationOrder();
 const TABLE_DELETION_ORDER = getDeletionOrder();
 
 // Helper to normalize column names to match SQL schema
-
-// Normaliza nombres de clientes para comparación y SQL
-function normalizeName(input) {
-    return (input || '')
-        .toString()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .replace(/[^a-zA-Z0-9]+/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .toLowerCase();
-}
-
 const normalizeKey = key =>
     key
         .toString()
@@ -68,32 +53,73 @@ const normalizeKey = key =>
         .replace(/^_|_$/g, '')
         .toLowerCase();
 
-// Extract column definitions from the metricas table for dynamic inserts and
-// numeric conversion. Lines with the form "[column] TYPE" are parsed to obtain
-// both the name and its SQL type.
-const METRIC_COLUMN_DEFINITIONS = SQL_TABLE_DEFINITIONS.metricas
-    .split('\n')
-    .map(line => line.trim())
-    .filter(line => line.startsWith('['))
-    .map(line => {
-        const name = line.slice(1, line.indexOf(']'));
-        const type = line.slice(line.indexOf(']') + 1).replace(/[,\s]+$/g, '').trim();
-        return { name, type };
-    });
+// Meta Excel to Database Field Mapping
+const META_FIELD_MAPPING = new Map([
+    // Identificadores principales
+    ['nombre_de_la_campana', 'nombre_de_la_campaña'],
+    ['nombre_del_conjunto_de_anuncios', 'nombre_del_anuncio'],
+    ['nombre_del_anuncio', 'nombre_del_anuncio'],
+    ['nombre_de_la_cuenta', 'nombre_de_la_cuenta'],
+    ['dia', 'finalizacion_de_campaña'],
+    ['edad', 'edad'],
+    ['sexo', 'sexo'],
+    
+    // Métricas de rendimiento
+    ['importe_gastado_eur', 'importe_gastado_EUR'],
+    ['impresiones', 'impresiones'],
+    ['alcance', 'alcance'],
+    ['frecuencia', 'frecuencia'],
+    ['cpm_costo_por_mil_impresiones', 'cpm_por_1000'],
+    ['clics_todos', 'clics_todos'],
+    ['clics_en_el_enlace', 'clics_enlace'],
+    ['visitas_a_la_pagina_de_destino', 'visitas_a_la_pagina_de_destino'],
+    ['ctr_todos', 'ctr_todos'],
+    ['ctr_porcentaje_de_clics_en_el_enlace', 'ctr_link_click_pct'],
+    ['cpc_todos', 'costo'],
+    
+    // Métricas de conversión
+    ['articulos_agregados_al_carrito', 'articulos_agregados_al_carrito'],
+    ['pagos_iniciados', 'pagos_iniciados'],
+    ['compras', 'compras'],
+    ['valor_de_conversion_de_compras', 'valor_de_conversion_compras'],
+    
+    // Métricas de video e interacción
+    ['reproducciones_de_video_de_3_segundos', 'reproducciones_de_video_3s'],
+    ['reproducciones_de_video_hasta_el_25', 'rep_video_25_pct'],
+    ['reproducciones_de_video_hasta_el_50', 'rep_video_50_pct'],
+    ['reproducciones_de_video_hasta_el_75', 'rep_video_75_pct'],
+    ['reproducciones_de_video_hasta_el_95', 'rep_video_95_pct'],
+    ['reproducciones_de_video_hasta_el_100', 'rep_video_100_pct'],
+    ['tiempo_promedio_de_reproduccion_del_video', 'tiempo_promedio_video'],
+    ['interacciones_con_la_publicacion', 'interacciones_con_la_publicacion'],
+    ['reacciones_a_publicaciones', 'reacciones_a_la_publicacion'],
+    ['comentarios_de_publicaciones', 'comentarios_de_la_publicacion'],
+    
+    // Campos adicionales
+    ['objetivo', 'objetivo'],
+    ['tipo_de_compra', 'tipo_de_puja'],
+    ['divisa', 'divisa'],
+    ['url_del_sitio_web', 'url_del_sitio_web']
+]);
 
-// Map normalized column names to their actual SQL names
-const METRIC_COLUMN_MAP = new Map(
-    METRIC_COLUMN_DEFINITIONS.map(def => [normalizeKey(def.name), def.name])
-);
+// Columns that contain numeric data
+const NUMERIC_COLUMNS = new Set([
+    'importe_gastado_EUR', 'impresiones', 'alcance', 'frecuencia', 'cpm_por_1000',
+    'clics_todos', 'clics_enlace', 'visitas_a_la_pagina_de_destino', 'ctr_todos',
+    'ctr_link_click_pct', 'costo', 'articulos_agregados_al_carrito', 'pagos_iniciados',
+    'compras', 'valor_de_conversion_compras', 'reproducciones_de_video_3s',
+    'rep_video_25_pct', 'rep_video_50_pct', 'rep_video_75_pct', 'rep_video_95_pct',
+    'rep_video_100_pct', 'tiempo_promedio_video', 'interacciones_con_la_publicacion',
+    'reacciones_a_la_publicacion', 'comentarios_de_la_publicacion'
+]);
 
-// Arrays/Sets of actual SQL column names for query generation and numeric detection
-const METRIC_COLUMNS = Array.from(METRIC_COLUMN_MAP.values());
-const NUMERIC_COLUMNS = new Set(
-    METRIC_COLUMN_DEFINITIONS.filter(def => /INT|DECIMAL|BIGINT|FLOAT|REAL/i.test(def.type)).map(def => def.name)
-);
-const DATE_COLUMNS = new Set(
-    METRIC_COLUMN_DEFINITIONS.filter(def => /DATE/i.test(def.type)).map(def => def.name)
-);
+// Columns that contain date data
+const DATE_COLUMNS = new Set([
+    'finalizacion_de_campaña', 'fecha_de_creacion', 'inicio_del_informe', 'fin_del_informe'
+]);
+
+// All available metric columns
+const METRIC_COLUMNS = Array.from(META_FIELD_MAPPING.values());
 
 // Mapear tipos de columnas SQL Server a tipos de mssql para parámetros preparados
 function toMssqlType(sqlTypeStr) {
@@ -119,14 +145,59 @@ function toMssqlType(sqlTypeStr) {
     return sql.VarChar(sql.MAX);
 }
 
-const MSSQL_TYPE_MAP = new Map(
-    METRIC_COLUMN_DEFINITIONS.map(def => [def.name, toMssqlType(def.type)])
-);
+// Default MSSQL types for Meta fields
+const MSSQL_TYPE_MAP = new Map([
+    // Default fallback for any unknown column
+    ['default', sql.VarChar(sql.MAX)],
+    
+    // Numeric fields
+    ['importe_gastado_EUR', sql.Decimal(18, 2)],
+    ['impresiones', sql.Int],
+    ['alcance', sql.Int],
+    ['frecuencia', sql.Decimal(10, 4)],
+    ['cpm_por_1000', sql.Decimal(10, 2)],
+    ['clics_todos', sql.Int],
+    ['clics_enlace', sql.Int],
+    ['visitas_a_la_pagina_de_destino', sql.Int],
+    ['ctr_todos', sql.Decimal(10, 4)],
+    ['ctr_link_click_pct', sql.Decimal(10, 4)],
+    ['costo', sql.Decimal(10, 2)],
+    ['articulos_agregados_al_carrito', sql.Int],
+    ['pagos_iniciados', sql.Int],
+    ['compras', sql.Int],
+    ['valor_de_conversion_compras', sql.Decimal(10, 2)],
+    ['reproducciones_de_video_3s', sql.Int],
+    ['rep_video_25_pct', sql.Decimal(10, 4)],
+    ['rep_video_50_pct', sql.Decimal(10, 4)],
+    ['rep_video_75_pct', sql.Decimal(10, 4)],
+    ['rep_video_95_pct', sql.Decimal(10, 4)],
+    ['rep_video_100_pct', sql.Decimal(10, 4)],
+    ['tiempo_promedio_video', sql.Int],
+    ['interacciones_con_la_publicacion', sql.Int],
+    ['reacciones_a_la_publicacion', sql.Int],
+    ['comentarios_de_la_publicacion', sql.Int],
+    
+    // Date fields
+    ['finalizacion_de_campaña', sql.Date],
+    ['fecha_de_creacion', sql.Date],
+    ['inicio_del_informe', sql.Date],
+    ['fin_del_informe', sql.Date],
+    
+    // Text fields
+    ['nombre_de_la_campaña', sql.VarChar(255)],
+    ['nombre_del_anuncio', sql.VarChar(255)],
+    ['edad', sql.VarChar(50)],
+    ['sexo', sql.VarChar(50)],
+    ['objetivo', sql.VarChar(255)],
+    ['tipo_de_puja', sql.VarChar(255)],
+    ['unique_id', sql.VarChar(255)],
+    ['id_reporte', sql.Int]
+]);
 
 // Utility numeric parser mirroring the client-side logic
 const parseNumber = (value) => {
-    if (value === null || value === undefined) return null;
-    if (typeof value === 'number') return isNaN(value) ? null : value;
+    if (value === null || value === undefined) return 0;
+    if (typeof value === 'number') return value;
     if (typeof value === 'string') {
         const cleaned = value
             .replace(/[€$]/g, '')
@@ -134,135 +205,10 @@ const parseNumber = (value) => {
             .replace(/\./g, '')
             .replace(/,/g, '.');
         const num = parseFloat(cleaned);
-        return isNaN(num) ? null : num;
+        return isNaN(num) ? 0 : num;
     }
-    return null;
+    return 0;
 };
-
-// Ensure required SQL schema for Meta imports
-async function ensureSchema(pool) {
-    const schemaSql = `SET XACT_ABORT ON;
-BEGIN TRY
-  BEGIN TRAN;
-
-  -- import_history con batch_data
-  IF OBJECT_ID('dbo.import_history','U') IS NULL
-  BEGIN
-    CREATE TABLE dbo.import_history(
-      id BIGINT IDENTITY(1,1) PRIMARY KEY,
-      source NVARCHAR(50) NOT NULL,
-      batch_data NVARCHAR(MAX) NULL,
-      created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
-    );
-  END
-  ELSE
-  BEGIN
-    IF COL_LENGTH('dbo.import_history','batch_data') IS NULL
-      ALTER TABLE dbo.import_history ADD batch_data NVARCHAR(MAX) NULL;
-  END
-
-  -- clients (GUID + UQ nombre normalizado)
-  IF OBJECT_ID('dbo.clients','U') IS NULL
-  BEGIN
-    CREATE TABLE dbo.clients(
-      client_id UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID(),
-      name NVARCHAR(255) NOT NULL,
-      name_norm NVARCHAR(255) NOT NULL,
-      created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
-      CONSTRAINT PK_clients PRIMARY KEY (client_id),
-      CONSTRAINT UQ_clients_name_norm UNIQUE (name_norm)
-    );
-  END
-
-  -- facts_meta base
-  IF OBJECT_ID('dbo.facts_meta','U') IS NULL
-  BEGIN
-    CREATE TABLE dbo.facts_meta(
-      fact_id BIGINT IDENTITY(1,1) NOT NULL,
-      client_id UNIQUEIDENTIFIER NOT NULL,
-      [date] DATE NOT NULL,
-      ad_id NVARCHAR(100) NULL,
-      campaign_id NVARCHAR(100) NULL,
-      adset_id NVARCHAR(100) NULL,
-      impressions BIGINT NULL,
-      clicks BIGINT NULL,
-      spend DECIMAL(18,4) NULL,
-      purchases INT NULL,
-      roas DECIMAL(18,4) NULL,
-      created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
-      CONSTRAINT PK_facts_meta PRIMARY KEY (fact_id)
-    );
-  END
-
-  -- columna calculada persistida + índices/FK
-  IF COL_LENGTH('dbo.facts_meta','ad_id_nz') IS NULL
-    ALTER TABLE dbo.facts_meta ADD ad_id_nz AS (ISNULL(ad_id,'')) PERSISTED;
-
-  IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name='FK_facts_meta_clients')
-    ALTER TABLE dbo.facts_meta ADD CONSTRAINT FK_facts_meta_clients
-      FOREIGN KEY (client_id) REFERENCES dbo.clients(client_id);
-
-  IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='UX_facts_meta_client_date_ad_nz' AND object_id=OBJECT_ID('dbo.facts_meta'))
-    CREATE UNIQUE INDEX UX_facts_meta_client_date_ad_nz
-      ON dbo.facts_meta(client_id,[date],ad_id_nz);
-
-  -- ads
-  IF OBJECT_ID('dbo.ads','U') IS NULL
-  BEGIN
-    CREATE TABLE dbo.ads(
-      ad_id NVARCHAR(100) NOT NULL PRIMARY KEY,
-      client_id UNIQUEIDENTIFIER NOT NULL,
-      name NVARCHAR(255) NULL,
-      ad_name_norm NVARCHAR(255) NULL,
-      ad_preview_link NVARCHAR(1000) NULL,
-      ad_creative_thumbnail_url NVARCHAR(1000) NULL,
-      created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
-    );
-    CREATE INDEX IX_ads_client_adname ON dbo.ads(client_id, ad_name_norm);
-  END
-
-  -- processed_files_hashes
-  IF OBJECT_ID('dbo.processed_files_hashes','U') IS NULL
-  BEGIN
-    CREATE TABLE dbo.processed_files_hashes(
-      id BIGINT IDENTITY(1,1) PRIMARY KEY,
-      file_hash NVARCHAR(128) NOT NULL,
-      created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
-    );
-  END
-
-  -- staging persistente para import META
-  IF OBJECT_ID('dbo._staging_facts','U') IS NULL
-  BEGIN
-    CREATE TABLE dbo._staging_facts(
-      session_id UNIQUEIDENTIFIER NOT NULL,
-      client_id UNIQUEIDENTIFIER NOT NULL,
-      [date] DATE NOT NULL,
-      ad_id NVARCHAR(100) NULL,
-      campaign_id NVARCHAR(100) NULL,
-      adset_id NVARCHAR(100) NULL,
-      impressions BIGINT NULL,
-      clicks BIGINT NULL,
-      spend DECIMAL(18,4) NULL,
-      purchases INT NULL,
-      purchase_value DECIMAL(18,4) NULL,
-      created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
-    );
-    CREATE INDEX IX__staging_facts_session ON dbo._staging_facts(session_id);
-  END
-
-  COMMIT;
-END TRY
-BEGIN CATCH
-  IF @@TRANCOUNT>0 ROLLBACK;
-  THROW;
-END CATCH;
-
-SELECT DB_NAME() AS active_db;`;
-
-    const result = await pool.request().query(schemaSql);
-    return result.recordset[0]?.active_db;
-}
 
 // Middleware
 app.use(cors());
@@ -392,17 +338,6 @@ app.post('/api/sql/connect', async (req, res) => {
         const result = await sqlPool.request().query('SELECT 1 as test');
         logger.info('[SQL] Conexión exitosa a SQL Server');
 
-        let activeDbName;
-        try {
-            activeDbName = await ensureSchema(sqlPool);
-            logger.info(`[SQL] Active DB: ${activeDbName}`);
-        } catch (schemaErr) {
-            logger.error('[SQL] Error ensuring schema:', schemaErr.message);
-            await sqlPool.close().catch(() => {});
-            sqlPool = null;
-            return res.status(500).json({ success: false, error: schemaErr.message });
-        }
-
         // Ensure necessary tables and columns exist immediately after connecting
         try {
             await ensureSqlTables();
@@ -500,13 +435,30 @@ app.get('/api/sql/permissions', async (req, res) => {
 async function ensureSqlTables() {
     const created = [];
     const altered = [];
+    logger.info(`[SQL] TABLE_CREATION_ORDER:`, TABLE_CREATION_ORDER);
+    logger.info(`[SQL] Available SQL_TABLE_DEFINITIONS:`, Object.keys(SQL_TABLE_DEFINITIONS));
+    
     for (const table of TABLE_CREATION_ORDER) {
+        logger.info(`[SQL] Checking if table "${table}" exists...`);
         const exists = await sqlPool
             .request()
             .query(`SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='${table}'`);
+        
         if (exists.recordset.length === 0) {
-            await sqlPool.request().query(SQL_TABLE_DEFINITIONS[table]);
-            created.push(table);
+            logger.info(`[SQL] Table "${table}" does not exist, creating...`);
+            const createSQL = SQL_TABLE_DEFINITIONS[table];
+            logger.info(`[SQL] CREATE SQL for "${table}":`, createSQL);
+            
+            try {
+                await sqlPool.request().query(createSQL);
+                created.push(table);
+                logger.info(`[SQL] ✅ Table "${table}" created successfully`);
+            } catch (createError) {
+                logger.error(`[SQL] ❌ Failed to create table "${table}":`, createError);
+                throw createError;
+            }
+        } else {
+            logger.info(`[SQL] Table "${table}" already exists`);
         }
     }
 
@@ -637,326 +589,293 @@ app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
     if (!req.file) {
         return res.status(400).json({ success: false, error: 'No file uploaded' });
     }
-    const confirmCreate = req.query.confirmCreate === '1';
+
+    const allowCreateClient = true; // Always allow creating clients automatically
+    logger.info(`[SQL] ===== STARTING EXCEL IMPORT =====`);
+    logger.info(`[SQL] File: ${req.file.originalname}`);
+    logger.info(`[SQL] File path: ${req.file.path}`);
+    logger.info(`[SQL] Allow create client: ${allowCreateClient}`);
+    
+    // Ensure tables exist before importing
+    logger.info(`[SQL] Step 1: Ensuring SQL tables exist...`);
     try {
+        const tableResult = await ensureSqlTables();
+        logger.info(`[SQL] ✅ Tables ensured successfully:`, tableResult);
+    } catch (tableError) {
+        logger.error(`[SQL] ❌ Table initialization failed:`, tableError);
+        logger.error(`[SQL] Error details:`, tableError.message);
+        logger.error(`[SQL] Stack trace:`, tableError.stack);
+        return res.status(500).json({ success: false, error: `Table initialization failed: ${tableError.message}` });
+    }
+    
+    try {
+        logger.info(`[SQL] Step 2: Reading Excel file...`);
         const fileBuffer = fs.readFileSync(req.file.path);
         const workbook = xlsx.read(fileBuffer, { type: 'buffer' });
         const sheet = workbook.Sheets[workbook.SheetNames[0]];
-        const rows = xlsx.utils.sheet_to_json(sheet, { defval: null });
+        logger.info(`[SQL] ✅ Excel file loaded, sheet: ${workbook.SheetNames[0]}`);
+
+        // Detect and skip title rows like "Raw Data Report"
+        let startRow = 0;
+        const firstCell = sheet['A1']?.v;
+        if (typeof firstCell === 'string' && firstCell.toLowerCase().includes('raw data report')) {
+            startRow = 1;
+        }
+        const rows = xlsx.utils.sheet_to_json(sheet, { defval: null, range: startRow });
+        logger.info(`[SQL] ✅ Parsed ${rows.length} rows from Excel`);
+
         if (rows.length === 0) {
-            logger.warn('[SQL][ImportMeta] Excel file is empty');
+            logger.error(`[SQL] ❌ Excel file is empty`);
             return res.status(400).json({ success: false, error: 'Excel file is empty' });
         }
-        logger.info(`[SQL][ImportMeta] loaded ${rows.length} rows from Excel`);
-        const first = rows[0];
-        const accountName = first['account_name'] || first['Account name'] || first['nombre_de_la_cuenta'] || first['Nombre de la cuenta'] || 'desconocido';
-        const nameNorm = normalizeName(accountName);
-        logger.info(`[SQL] Import META account="${accountName}" norm="${nameNorm}" confirm=${confirmCreate}`);
-        let queryResult = await sqlPool
-            .request()
-            .input('name_norm', sql.NVarChar(255), nameNorm)
-            .query('SELECT TOP 1 client_id FROM dbo.clients WHERE name_norm = @name_norm');
-        let clientId;
-        if (queryResult.recordset.length === 0) {
-            if (!confirmCreate) {
-                logger.info(`[SQL] Cliente no encontrado: ${nameNorm}, solicitando confirmación`);
-                return res.status(409).json({ needsConfirmation: true, accountName, nameNorm });
-            }
-            const createRes = await sqlPool
+
+        // Determine client from first row
+        logger.info(`[SQL] Step 3: Determining client from first row...`);
+        const firstRow = rows[0];
+        logger.info(`[SQL] First row keys:`, Object.keys(firstRow));
+        
+        const clientName =
+            firstRow['nombre_de_la_cuenta'] ||
+            firstRow['Nombre de la cuenta'] ||
+            firstRow['Account name'] ||
+            'desconocido';
+        
+        logger.info(`[SQL] ✅ Client name determined: "${clientName}"`);
+        logger.info(`[SQL] Step 4: Checking if client exists in database...`);
+
+        // Ensure client exists
+        let result;
+        try {
+            result = await sqlPool
                 .request()
-                .input('name', sql.NVarChar(255), accountName)
-                .input('name_norm', sql.NVarChar(255), nameNorm)
-                .query(`DECLARE @out TABLE(client_id UNIQUEIDENTIFIER, name NVARCHAR(255), name_norm NVARCHAR(255), created_at DATETIME2);
-MERGE dbo.clients AS T
-USING (SELECT @name_norm AS name_norm, @name AS name) AS S
-ON T.name_norm = S.name_norm
-WHEN MATCHED THEN UPDATE SET name = S.name
-WHEN NOT MATCHED THEN
-  INSERT (client_id, name, name_norm) VALUES (NEWID(), S.name, S.name_norm)
-OUTPUT inserted.client_id, inserted.name, inserted.name_norm, inserted.created_at INTO @out;
-SELECT client_id FROM @out;`);
-            clientId = createRes.recordset[0].client_id;
-            logger.info(`[SQL] Cliente creado: ${accountName} (${clientId})`);
-        } else {
-            clientId = queryResult.recordset[0].client_id;
+                .input('nombre', sql.VarChar(255), clientName)
+                .query('SELECT client_id FROM clients WHERE name = @nombre');
+            logger.info(`[SQL] ✅ Client lookup query executed successfully`);
+        } catch (clientQueryError) {
+            logger.error(`[SQL] ❌ Client lookup query failed:`, clientQueryError);
+            logger.error(`[SQL] Query was: SELECT client_id FROM clients WHERE name = @nombre`);
+            logger.error(`[SQL] Parameter: @nombre = "${clientName}"`);
+            throw clientQueryError;
         }
-        const facts = [];
-        // Counters for different skip reasons
-        let missing_date = 0;
-        let missing_ad_name = 0;
-        let ad_id_too_long = 0;
-        let invalid_impressions = 0;
-        let invalid_clicks = 0;
-        let invalid_purchases = 0;
-        let invalid_spend = 0;
-        let invalid_purchase_value = 0;
-        const examples = {};
-        const BIGINT_MAX = 9_223_372_036_854_775_807;
-        const INT_MIN = -2_147_483_648;
-        const INT_MAX = 2_147_483_647;
-        const DECIMAL_MAX = 99_999_999_999_999.9999;
-        const isValidBigInt = v => v === null || (Number.isInteger(v) && Math.abs(v) <= BIGINT_MAX);
-        const isValidInt = v => v === null || (Number.isInteger(v) && v >= INT_MIN && v <= INT_MAX);
-        const isValidDecimal = v => v === null || (typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= DECIMAL_MAX);
-        for (let i = 0; i < rows.length; i++) {
-            const r = rows[i];
-            const d = parseDateForSort(
-                r['date'] || r['day'] || r['día'] || r['fecha'] || r['Fecha']
-            );
-            if (!d) {
-                missing_date++;
-                examples.missing_date ??= r;
-                continue;
+        let clientId;
+        logger.info(`[SQL] Client lookup result: ${result.recordset.length} records found`);
+        
+        if (result.recordset.length === 0) {
+            logger.info(`[SQL] Client "${clientName}" not found. allowCreateClient = ${allowCreateClient}`);
+            
+            if (!allowCreateClient) {
+                logger.error(`[SQL] ❌ Client creation not allowed`);
+                return res.status(400).json({ success: false, error: `Client ${clientName} not found` });
             }
-            const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())).toISOString().split('T')[0];
-            const adName = String(r['ad_name'] || r['Ad name'] || r['ad name'] || '').trim();
-            if (!adName) {
-                missing_ad_name++;
-                examples.missing_ad_name ??= r;
-                continue;
-            }
-            const adId = adIdFromName(normalizeName(adName));
-            if (adId && adId.length > 100) {
-                logger.warn(`[SQL][ImportMeta] ad_id too long`, { row: i, length: adId.length });
-                ad_id_too_long++;
-                examples.ad_id_too_long ??= r;
-                continue;
-            }
-            const campaignId = r['campaign_id'] || r['campaign id'] || '';
-            const adsetId = r['adset_id'] || r['adset id'] || '';
-            const impressions = parseNumber(r['impressions'] ?? null);
-            const clicks = parseNumber(r['clicks'] ?? null);
-            const spend = parseNumber(r['spend'] ?? r['amount_spent (eur)'] ?? null);
-            const purchases = parseNumber(r['purchases'] ?? null);
-            const purchase_value = parseNumber(r['purchase_value'] ?? r['purchase value'] ?? null);
-            if (!isValidBigInt(impressions)) {
-                logger.warn(`[SQL][ImportMeta] impressions out of range`, { row: i, value: impressions });
-                invalid_impressions++;
-                examples.invalid_impressions ??= r;
-                continue;
-            }
-            if (!isValidBigInt(clicks)) {
-                logger.warn(`[SQL][ImportMeta] clicks out of range`, { row: i, value: clicks });
-                invalid_clicks++;
-                examples.invalid_clicks ??= r;
-                continue;
-            }
-            if (!isValidInt(purchases)) {
-                logger.warn(`[SQL][ImportMeta] purchases out of range`, { row: i, value: purchases });
-                invalid_purchases++;
-                examples.invalid_purchases ??= r;
-                continue;
-            }
-            if (!isValidDecimal(spend)) {
-                logger.warn(`[SQL][ImportMeta] spend out of range`, { row: i, value: spend });
-                invalid_spend++;
-                examples.invalid_spend ??= r;
-                continue;
-            }
-            if (!isValidDecimal(purchase_value)) {
-                logger.warn(`[SQL][ImportMeta] purchase_value out of range`, { row: i, value: purchase_value });
-                invalid_purchase_value++;
-                examples.invalid_purchase_value ??= r;
-                continue;
-            }
-            facts.push({
-                client_id: clientId,
-                date,
-                ad_id: adId,
-                campaign_id: campaignId === '' ? null : campaignId,
-                adset_id: adsetId === '' ? null : adsetId,
-                impressions,
-                clicks,
-                spend,
-                purchases,
-                purchase_value
-            });
-        }
-
-        const skippedRows =
-            missing_date +
-            missing_ad_name +
-            ad_id_too_long +
-            invalid_impressions +
-            invalid_clicks +
-            invalid_purchases +
-            invalid_spend +
-            invalid_purchase_value;
-        logger.info(
-            `[SQL][ImportMeta] parsed ${rows.length} valid=${facts.length} ` +
-                `missing_date=${missing_date} missing_ad_name=${missing_ad_name} ` +
-                `ad_id_too_long=${ad_id_too_long} invalid_impressions=${invalid_impressions} ` +
-                `invalid_clicks=${invalid_clicks} invalid_purchases=${invalid_purchases} ` +
-                `invalid_spend=${invalid_spend} invalid_purchase_value=${invalid_purchase_value}`
-        );
-        logger.debug('Examples of skipped rows', examples);
-
-        const sessionId = uuidv4();
-
-        const bulkInsertRows = async rows => {
-            if (rows.length === 0) {
-                logger.info(`[SQL][ImportMeta] no rows to bulk insert for session_id=${sessionId}`);
-                return;
-            }
-            const table = new sql.Table('_staging_facts');
-            table.create = false;
-            table.schema = 'dbo';
-            table.columns.add('session_id', sql.UniqueIdentifier, { nullable: false });
-            table.columns.add('client_id', sql.UniqueIdentifier, { nullable: false });
-            table.columns.add('date', sql.Date, { nullable: false });
-            table.columns.add('ad_id', sql.NVarChar(100), { nullable: true });
-            table.columns.add('campaign_id', sql.NVarChar(100), { nullable: true });
-            table.columns.add('adset_id', sql.NVarChar(100), { nullable: true });
-            table.columns.add('impressions', sql.BigInt, { nullable: true });
-            table.columns.add('clicks', sql.BigInt, { nullable: true });
-            table.columns.add('spend', sql.Decimal(18,4), { nullable: true });
-            table.columns.add('purchases', sql.Int, { nullable: true });
-            table.columns.add('purchase_value', sql.Decimal(18,4), { nullable: true });
-            for (let i = 0; i < rows.length; i++) {
-                const f = rows[i];
-                try {
-                    table.rows.add(sessionId, f.client_id, f.date, f.ad_id, f.campaign_id, f.adset_id, f.impressions, f.clicks, f.spend, f.purchases, f.purchase_value);
-                } catch (rowErr) {
-                    logger.error(`[SQL][ImportMeta] Error adding row ${i}`, { row: f, error: rowErr });
-                    throw new Error(`Failed to add row ${i}: ${rowErr.message}`);
-                }
-            }
+            
+            logger.info(`[SQL] Step 5: Creating new client "${clientName}"...`);
             try {
-                await sqlPool.request().bulk(table);
-                logger.info(`[SQL][ImportMeta] bulk inserted ${rows.length} rows into staging`, { sessionId });
-            } catch (err) {
-                if (rows.length === 1) {
-                    logger.error(`[SQL][ImportMeta] Bulk insert failed for single row`, { sessionId, row: rows[0], error: err });
-                    return; // skip problematic row
-                }
-                const mid = Math.floor(rows.length / 2);
-                logger.warn(`[SQL][ImportMeta] Bulk insert failed, retrying in smaller batches`, { sessionId, rows: rows.length, error: err });
-                await bulkInsertRows(rows.slice(0, mid));
-                await bulkInsertRows(rows.slice(mid));
+                // Import normalizeName function
+                const { normalizeName } = await import('./lib/normalizeName.js');
+                const normalizedName = normalizeName(clientName);
+                
+                result = await sqlPool
+                    .request()
+                    .input('nombre', sql.VarChar(255), clientName)
+                    .input('nombre_norm', sql.VarChar(255), normalizedName)
+                    .query('INSERT INTO clients (name, name_norm) OUTPUT INSERTED.client_id VALUES (@nombre, @nombre_norm)');
+                clientId = result.recordset[0].client_id;
+                logger.info(`[SQL] ✅ Client created successfully with ID: ${clientId}`);
+            } catch (createClientError) {
+                logger.error(`[SQL] ❌ Failed to create client:`, createClientError);
+                throw createClientError;
             }
-
-        };
-
-        await bulkInsertRows(facts);
-
-        const mergeRes = await sqlPool
-            .request()
-            .input('P_session_id', sql.UniqueIdentifier, sessionId)
-            .query(`SET XACT_ABORT ON;
-DECLARE @sid UNIQUEIDENTIFIER = @P_session_id;
-
-BEGIN TRY
-  BEGIN TRAN;
-
-  ;WITH Agg AS (
-    SELECT client_id, [date], ad_id,
-           SUM(impressions) impressions,
-           SUM(clicks)      clicks,
-           SUM(spend)       spend,
-           SUM(purchases)   purchases,
-           CASE WHEN SUM(spend)>0 AND SUM(purchase_value) IS NOT NULL
-                THEN SUM(purchase_value)/NULLIF(SUM(spend),0) END AS roas
-    FROM dbo._staging_facts
-    WHERE session_id = @sid
-    GROUP BY client_id, [date], ad_id
-  )
-  SELECT * INTO #agg_facts FROM Agg;
-
-  IF OBJECT_ID('tempdb..#actions') IS NOT NULL DROP TABLE #actions;
-  CREATE TABLE #actions(action NVARCHAR(10));
-
-  MERGE dbo.facts_meta AS T
-  USING #agg_facts AS S
-  ON  T.client_id = S.client_id
-  AND T.[date]    = S.[date]
-  AND ISNULL(T.ad_id,'') = ISNULL(S.ad_id,'')
-  WHEN MATCHED THEN UPDATE SET
-    impressions = S.impressions,
-    clicks      = S.clicks,
-    spend       = S.spend,
-    purchases   = S.purchases,
-    roas        = S.roas
-  WHEN NOT MATCHED THEN INSERT
-    (client_id,[date],ad_id,impressions,clicks,spend,purchases,roas)
-    VALUES
-    (S.client_id,S.[date],S.ad_id,S.impressions,S.clicks,S.spend,S.purchases,S.roas)
-  OUTPUT $action INTO #actions;
-
-  DELETE FROM dbo._staging_facts WHERE session_id=@sid;
-
-  COMMIT;
-
-  SELECT
-    SUM(CASE WHEN action='INSERT' THEN 1 ELSE 0 END) AS inserted,
-    SUM(CASE WHEN action='UPDATE' THEN 1 ELSE 0 END) AS updated
-  FROM #actions;
-
-END TRY
-BEGIN CATCH
-  DECLARE @n INT=ERROR_NUMBER(), @m NVARCHAR(4000)=ERROR_MESSAGE(), @l INT=ERROR_LINE();
-  IF @@TRANCOUNT>0 ROLLBACK;
-  DELETE FROM dbo._staging_facts WHERE session_id=@sid;
-  SELECT @n AS error_number, @m AS error_message, @l AS error_line;
-END CATCH;`);
-
-        const resRow = mergeRes.recordset[0] || {};
-        if (resRow.error_number) {
-            logger.error(`[SQL][ImportMeta] account="${accountName}" client_id=${clientId} session_id=${sessionId} error_number=${resRow.error_number} line=${resRow.error_line} message=${resRow.error_message}`);
-            return res.status(500).json({ ok: false, error: resRow.error_message, detail: resRow, sessionId });
+        } else {
+            clientId = result.recordset[0].client_id;
+            logger.info(`[SQL] ✅ Existing client found with ID: ${clientId}`);
         }
 
-        const inserted = resRow.inserted || 0;
-        const updated = resRow.updated || 0;
-        const summary =
-            `[SQL][ImportMeta] account="${accountName}" client_id=${clientId} session_id=${sessionId} total_rows=${rows.length} ` +
-            ` valid=${facts.length} skipped=${skippedRows} ` +
-            `missing_date=${missing_date} missing_ad_name=${missing_ad_name} ad_id_too_long=${ad_id_too_long} ` +
-            `invalid_impressions=${invalid_impressions} invalid_clicks=${invalid_clicks} invalid_purchases=${invalid_purchases} ` +
-            `invalid_spend=${invalid_spend} invalid_purchase_value=${invalid_purchase_value} inserted=${inserted} updated=${updated}`;
-        logger.info(summary);
+        const uniqueDays = new Set();
+        const records = [];
+        const fileUniqueIds = new Set();
 
+        for (const row of rows) {
+            const normalized = {};
+            const original = {};
+            for (const [k, v] of Object.entries(row)) {
+                const nk = normalizeKey(k);
+                original[nk] = v;
+                const colName = META_FIELD_MAPPING.get(nk);
+                if (colName) {
+                    if (NUMERIC_COLUMNS.has(colName)) {
+                        normalized[colName] = parseNumber(v);
+                    } else if (DATE_COLUMNS.has(colName)) {
+                        const d = parseDateForSort(v);
+                        normalized[colName] = d ? new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())) : null;
+                    } else {
+                        normalized[colName] = v;
+                    }
+                }
+            }
+            const uniqueId = `${original.dia || original.day}_${
+                original.nombre_de_la_campana || original.campaign_name || ''
+            }_${
+                original.nombre_del_anuncio || original.ad_name || ''
+            }_${original.edad || original.age || ''}_${original.sexo || original.gender || ''}`;
+            if (!uniqueId || fileUniqueIds.has(uniqueId)) {
+                continue;
+            }
+            fileUniqueIds.add(uniqueId);
+            normalized.unique_id = uniqueId;
+            records.push(normalized);
+            const dayValue = original.dia || original.day;
+            if (dayValue) uniqueDays.add(dayValue);
+        }
+
+        const parsedDates = Array.from(uniqueDays)
+            .map(parseDateForSort)
+            .filter(d => d !== null);
+        const periodStart =
+            parsedDates.length > 0
+                ? new Date(Math.min(...parsedDates.map(d => d.getTime())))
+                      .toISOString()
+                      .split('T')[0]
+                : null;
+        const periodEnd =
+            parsedDates.length > 0
+                ? new Date(Math.max(...parsedDates.map(d => d.getTime())))
+                      .toISOString()
+                      .split('T')[0]
+                : null;
+        const daysDetected = uniqueDays.size;
+
+        // Create or reuse report record
+        const fileHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
+
+        // Check if this file was already imported
+        const existingReport = await sqlPool
+            .request()
+            .input('hash_archivo', sql.Char(64), fileHash)
+            .query('SELECT id_reporte FROM archivos_reporte WHERE hash_archivo = @hash_archivo');
+
+        if (existingReport.recordset.length > 0) {
+            return res.status(400).json({ success: false, error: 'Este archivo ya fue importado anteriormente' });
+        }
+
+        const report = await sqlPool
+            .request()
+            .input('client_id', sql.Int, clientId)
+            .input('nombre_archivo', sql.VarChar(255), req.file.originalname)
+            .input('hash_archivo', sql.Char(64), fileHash)
+            .input('period_start', sql.Date, periodStart)
+            .input('period_end', sql.Date, periodEnd)
+            .input('days_detected', sql.Int, daysDetected)
+            .query(
+                'INSERT INTO archivos_reporte (client_id, nombre_archivo, hash_archivo, period_start, period_end, days_detected) OUTPUT INSERTED.id_reporte VALUES (@client_id, @nombre_archivo, @hash_archivo, @period_start, @period_end, @days_detected)'
+            );
+        const reportId = report.recordset[0].id_reporte;
+
+        let inserted = 0;
+        let updated = 0;
+        let skipped = rows.length - records.length;
+
+        const transaction = new sql.Transaction(sqlPool);
+        await transaction.begin();
+        try {
+            const metricCols = METRIC_COLUMNS.filter(c => c !== 'unique_id');
+            const allParams = ['id_reporte', 'unique_id', ...metricCols];
+
+            // Create a safe parameter name (ASCII only) for each column/param
+            const toParam = (col) => 'p_' + normalizeKey(col);
+
+            const updateCols = metricCols; // exclude id_reporte from SET
+
+            logger.info(`[SQL] Starting to process ${records.length} records for import`);
+        for (const rec of records) {
+                rec.id_reporte = reportId;
+
+                // First attempt an update within the same report
+                const updateReq = transaction.request();
+                updateReq.input(toParam('unique_id'), MSSQL_TYPE_MAP.get('unique_id') || sql.VarChar(255), rec.unique_id);
+                updateReq.input(toParam('id_reporte'), sql.Int, reportId);
+                updateCols.forEach(col => {
+                    const type = MSSQL_TYPE_MAP.get(col) || sql.VarChar(sql.MAX);
+                    updateReq.input(toParam(col), type, rec[col] ?? null);
+                });
+                const updateResult = await updateReq.query(
+                    `UPDATE metricas SET ${updateCols
+                        .map(c => `[${c}] = @${toParam(c)}`)
+                        .join(', ')} WHERE unique_id = @${toParam('unique_id')} AND id_reporte = @${toParam('id_reporte')}`
+                );
+
+                if (updateResult.rowsAffected[0] > 0) {
+                    updated++;
+                    logger.info(`[SQL] Updated record with unique_id: ${rec.unique_id}`);
+                    continue;
+                }
+
+                // If no rows updated, insert new record
+                const insertReq = transaction.request();
+                allParams.forEach(col => {
+                    const type = MSSQL_TYPE_MAP.get(col) || sql.VarChar(sql.MAX);
+                    const paramType = col === 'id_reporte' ? sql.Int : type;
+                    insertReq.input(toParam(col), paramType, rec[col] ?? null);
+                });
+                await insertReq.query(
+                    `INSERT INTO metricas (${allParams.map(c => `[${c}]`).join(', ')}) VALUES (${allParams
+                        .map(c => `@${toParam(c)}`)
+                        .join(', ')})`
+                );
+                inserted++;
+                logger.info(`[SQL] Inserted new record with unique_id: ${rec.unique_id}`);
+            }
+
+            await transaction.commit();
+            logger.info(`[SQL] Transaction committed successfully. Inserted: ${inserted}, Updated: ${updated}, Skipped: ${skipped}`);
+        } catch (err) {
+            await transaction.rollback().catch(rbErr => {
+                logger.error('[SQL] Rollback failed:', rbErr);
+            });
+            throw err;
+        }
+
+        const history = {
+            id: crypto.randomUUID(),
+            timestamp: new Date().toISOString(),
+            source: 'sql',
+            fileName: req.file.originalname,
+            fileHash,
+            clientName,
+            description: `${inserted} insertados, ${updated} actualizados, ${skipped} omitidos`,
+            undoData: { type: 'sql', keys: [], clientId: String(clientId) },
+            periodStart,
+            periodEnd,
+            daysDetected
+        };
         await sqlPool
             .request()
-            .input('source', sql.NVarChar(50), 'sql')
-            .input('batch_data', sql.NVarChar(sql.MAX), JSON.stringify({ id: crypto.randomUUID(), timestamp: new Date().toISOString(), source: 'sql', fileName: req.file.originalname, accountName, nameNorm, summary: { inserted, updated } }))
-            .query('INSERT INTO import_history (source, batch_data) VALUES (@source, @batch_data)');
+            .input('source', sql.VarChar(50), 'meta-excel')
+            .input('payload', sql.NVarChar(sql.MAX), JSON.stringify(history))
+            .query('INSERT INTO import_history (source, payload) VALUES (@source, @payload)');
 
-        res.json({
-            inserted,
-            updated,
-            sessionId,
-            skipped: skippedRows,
-            missing_date,
-            missing_ad_name,
-            ad_id_too_long,
-            invalid_impressions,
-            invalid_clicks,
-            invalid_purchases,
-            invalid_spend,
-            invalid_purchase_value
-        });
-    } catch (err) {
-        logger.error('[SQL] Error importing Excel:', err);
-        res.status(500).json({ success: false, error: err.message });
+        res.json({ success: true, inserted, updated, skipped, clientName, periodStart, periodEnd });
+    } catch (error) {
+        logger.error('[SQL] ❌ ERROR IMPORTING EXCEL:');
+        logger.error('[SQL] Error message:', error.message);
+        logger.error('[SQL] Error code:', error.code);
+        logger.error('[SQL] Error number:', error.number);
+        logger.error('[SQL] Error state:', error.state);
+        logger.error('[SQL] Full error object:', error);
+        logger.error('[SQL] Stack trace:', error.stack);
+        res.status(500).json({ success: false, error: error.message });
     } finally {
         fs.unlink(req.file.path, () => {});
     }
 });
+
+// Get SQL import history
 app.get('/api/sql/import-history', async (req, res) => {
     if (!sqlPool) {
         return res.status(400).json({ success: false, error: 'Not connected' });
     }
     try {
-        const result = await sqlPool.request().query(`
-SELECT id, source, batch_data, created_at
-FROM dbo.import_history
-ORDER BY id DESC;
-        `);
-        const history = result.recordset
-            .map(r => {
-                try { return JSON.parse(r.batch_data); } catch { return null; }
-            })
-            .filter(Boolean);
+    const result = await sqlPool.request().query('SELECT payload FROM import_history ORDER BY created_at DESC');
+    const history = result.recordset.map(r => JSON.parse(r.payload));
         res.json({ success: true, history });
     } catch (error) {
         logger.error('[Server] Error loading SQL import history:', error);
@@ -970,16 +889,269 @@ app.post('/api/sql/ensure-schema', async (req, res) => {
         return res.status(400).json({ ok: false, error: 'Not connected' });
     }
     logger.info('[SQL][EnsureSchema] start');
+    const actions = [];
     try {
-        const activeDb = await ensureSchema(sqlPool);
-        logger.info('[SQL][EnsureSchema] done');
-        res.json({ ok: true, activeDb });
+        const schemaSql = `
+SET NOCOUNT ON;
+DECLARE @actions TABLE(step NVARCHAR(100), detail NVARCHAR(4000), status NVARCHAR(50), rows INT NULL);
+
+DECLARE @clients_client_id_type NVARCHAR(128);
+DECLARE @facts_client_id_type   NVARCHAR(128);
+
+SELECT @clients_client_id_type = TY.name
+FROM sys.columns C
+JOIN sys.types TY ON TY.user_type_id = C.user_type_id
+WHERE C.object_id = OBJECT_ID('dbo.clients') AND C.name = 'client_id';
+
+SELECT @facts_client_id_type = TY.name
+FROM sys.columns C
+JOIN sys.types TY ON TY.user_type_id = C.user_type_id
+WHERE C.object_id = OBJECT_ID('dbo.facts_meta') AND C.name = 'client_id';
+
+IF OBJECT_ID('dbo.clients','U') IS NULL
+BEGIN
+  CREATE TABLE dbo.clients(
+    client_id UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID(),
+    name NVARCHAR(255) NOT NULL,
+    name_norm NVARCHAR(255) NOT NULL,
+    created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT PK_clients PRIMARY KEY (client_id)
+  );
+  INSERT INTO @actions VALUES('create-table','clients','ok',NULL);
+  SET @clients_client_id_type = 'uniqueidentifier';
+END;
+
+IF COL_LENGTH('dbo.clients','client_id') IS NULL AND COL_LENGTH('dbo.clients','id') IS NOT NULL
+BEGIN
+  EXEC sp_rename 'dbo.clients.id', 'client_id', 'COLUMN';
+  INSERT INTO @actions VALUES('rename-column','clients.id -> clients.client_id','ok',NULL);
+  SET @clients_client_id_type = NULL;
+END;
+
+SELECT @clients_client_id_type = TY.name
+FROM sys.columns C
+JOIN sys.types TY ON TY.user_type_id = C.user_type_id
+WHERE C.object_id = OBJECT_ID('dbo.clients') AND C.name = 'client_id';
+
+IF @clients_client_id_type IS NOT NULL AND @clients_client_id_type <> 'uniqueidentifier'
+BEGIN
+  IF COL_LENGTH('dbo.clients','client_id_uid') IS NULL
+    ALTER TABLE dbo.clients ADD client_id_uid UNIQUEIDENTIFIER NULL;
+  UPDATE dbo.clients SET client_id_uid = ISNULL(client_id_uid, NEWID());
+  DECLARE @pk_clients sysname;
+  SELECT @pk_clients = kc.name
+  FROM sys.key_constraints kc
+  WHERE kc.parent_object_id = OBJECT_ID('dbo.clients') AND kc.type='PK';
+  IF @pk_clients IS NOT NULL
+  BEGIN
+    DECLARE @sql NVARCHAR(MAX) = N'ALTER TABLE dbo.clients DROP CONSTRAINT ['+@pk_clients+N']';
+    EXEC sp_executesql @sql;
+  END
+  ALTER TABLE dbo.clients ADD CONSTRAINT PK_clients PRIMARY KEY (client_id_uid);
+  EXEC sp_rename 'dbo.clients.client_id', 'client_id_int', 'COLUMN';
+  EXEC sp_rename 'dbo.clients.client_id_uid', 'client_id', 'COLUMN';
+  INSERT INTO @actions VALUES('migrate-type','clients.client_id int -> uniqueidentifier','ok',NULL);
+  IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='UQ_clients_name_norm' AND object_id=OBJECT_ID('dbo.clients'))
+    CREATE UNIQUE INDEX UQ_clients_name_norm ON dbo.clients(name_norm);
+END
+ELSE
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='UQ_clients_name_norm' AND object_id=OBJECT_ID('dbo.clients'))
+    CREATE UNIQUE INDEX UQ_clients_name_norm ON dbo.clients(name_norm);
+END;
+
+IF OBJECT_ID('dbo.facts_meta','U') IS NULL
+BEGIN
+  CREATE TABLE dbo.facts_meta(
+    fact_id BIGINT IDENTITY(1,1) NOT NULL,
+    client_id UNIQUEIDENTIFIER NULL,
+    [date] DATE NOT NULL,
+    ad_id NVARCHAR(100) NULL,
+    campaign_id NVARCHAR(100) NULL,
+    adset_id NVARCHAR(100) NULL,
+    impressions BIGINT NULL,
+    clicks BIGINT NULL,
+    spend DECIMAL(18,4) NULL,
+    purchases INT NULL,
+    roas DECIMAL(18,4) NULL,
+    created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+  );
+  INSERT INTO @actions VALUES('create-table','facts_meta','ok',NULL);
+  SET @facts_client_id_type = 'uniqueidentifier';
+END;
+
+IF COL_LENGTH('dbo.facts_meta','ad_id_nz') IS NULL
+BEGIN
+  ALTER TABLE dbo.facts_meta ADD ad_id_nz AS (ISNULL(ad_id,'')) PERSISTED;
+  INSERT INTO @actions VALUES('add-column','facts_meta.ad_id_nz (computed persisted)','ok',NULL);
+END;
+
+IF EXISTS (SELECT 1 FROM sys.indexes WHERE name='UX_facts_meta_client_date_ad_nz' AND object_id=OBJECT_ID('dbo.facts_meta'))
+BEGIN
+  DROP INDEX [UX_facts_meta_client_date_ad_nz] ON dbo.facts_meta;
+  INSERT INTO @actions VALUES('drop-index','UX_facts_meta_client_date_ad_nz','dropped',NULL);
+END;
+
+IF EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name='FK_facts_meta_clients' AND parent_object_id=OBJECT_ID('dbo.facts_meta'))
+BEGIN
+  ALTER TABLE dbo.facts_meta DROP CONSTRAINT [FK_facts_meta_clients];
+  INSERT INTO @actions VALUES('drop-fk','FK_facts_meta_clients','dropped',NULL);
+END;
+
+DECLARE @pk_facts sysname;
+SELECT @pk_facts = kc.name
+FROM sys.key_constraints kc
+JOIN sys.index_columns ic ON ic.object_id = kc.parent_object_id AND ic.index_id = kc.unique_index_id
+JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+WHERE kc.parent_object_id = OBJECT_ID('dbo.facts_meta')
+  AND kc.type = 'PK'
+  AND c.name = 'client_id';
+
+IF @pk_facts IS NOT NULL
+BEGIN
+  DECLARE @sql2 NVARCHAR(MAX) = N'ALTER TABLE dbo.facts_meta DROP CONSTRAINT ['+@pk_facts+N']';
+  EXEC sp_executesql @sql2;
+  INSERT INTO @actions VALUES('drop-pk-on-client_id',@pk_facts,'dropped',NULL);
+END;
+
+SELECT @facts_client_id_type = TY.name
+FROM sys.columns C
+JOIN sys.types TY ON TY.user_type_id = C.user_type_id
+WHERE C.object_id = OBJECT_ID('dbo.facts_meta') AND C.name = 'client_id';
+
+IF @facts_client_id_type IS NOT NULL AND @facts_client_id_type <> 'uniqueidentifier'
+BEGIN
+  IF COL_LENGTH('dbo.facts_meta','client_id_uid') IS NULL
+    ALTER TABLE dbo.facts_meta ADD client_id_uid UNIQUEIDENTIFIER NULL;
+
+  IF NOT EXISTS (SELECT 1 FROM dbo.clients WHERE name_norm = N'unassigned')
+    INSERT INTO dbo.clients (client_id, name, name_norm) VALUES (NEWID(), N'Unassigned', N'unassigned');
+
+  DECLARE @unassigned UNIQUEIDENTIFIER = (SELECT TOP (1) client_id FROM dbo.clients WHERE name_norm = N'unassigned');
+
+  UPDATE dbo.facts_meta SET client_id_uid = ISNULL(client_id_uid, @unassigned);
+
+  ALTER TABLE dbo.facts_meta DROP COLUMN client_id;
+  EXEC sp_rename 'dbo.facts_meta.client_id_uid', 'client_id', 'COLUMN';
+
+  INSERT INTO @actions VALUES('migrate-type','facts_meta.client_id int -> uniqueidentifier (placeholder)','ok',@@ROWCOUNT);
+END
+ELSE
+BEGIN
+  IF EXISTS (SELECT 1 FROM dbo.facts_meta WHERE client_id IS NULL)
+  BEGIN
+    IF NOT EXISTS (SELECT 1 FROM dbo.clients WHERE name_norm = N'unassigned')
+      INSERT INTO dbo.clients (client_id, name, name_norm) VALUES (NEWID(), N'Unassigned', N'unassigned');
+    DECLARE @unassigned2 UNIQUEIDENTIFIER = (SELECT TOP (1) client_id FROM dbo.clients WHERE name_norm = N'unassigned');
+    UPDATE dbo.facts_meta SET client_id = @unassigned2 WHERE client_id IS NULL;
+    INSERT INTO @actions VALUES('backfill-null','facts_meta.client_id -> Unassigned','ok',@@ROWCOUNT);
+  END
+END;
+
+BEGIN TRY
+  ALTER TABLE dbo.facts_meta ALTER COLUMN client_id UNIQUEIDENTIFIER NOT NULL;
+  INSERT INTO @actions VALUES('alter-not-null','facts_meta.client_id','ok',NULL);
+END TRY
+BEGIN CATCH
+  DECLARE @msg NVARCHAR(4000) = ERROR_MESSAGE();
+  INSERT INTO @actions VALUES('alter-not-null','facts_meta.client_id',@msg,NULL);
+  THROW;
+END CATCH
+
+IF NOT EXISTS (SELECT 1 FROM sys.key_constraints WHERE parent_object_id=OBJECT_ID('dbo.facts_meta') AND type='PK')
+BEGIN
+  ALTER TABLE dbo.facts_meta ADD CONSTRAINT PK_facts_meta PRIMARY KEY (fact_id);
+  INSERT INTO @actions VALUES('create-pk','PK_facts_meta on fact_id','ok',NULL);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name='FK_facts_meta_clients' AND parent_object_id=OBJECT_ID('dbo.facts_meta'))
+BEGIN
+  ALTER TABLE dbo.facts_meta
+    ADD CONSTRAINT [FK_facts_meta_clients] FOREIGN KEY (client_id)
+    REFERENCES dbo.clients(client_id);
+  INSERT INTO @actions VALUES('create-fk','FK_facts_meta_clients','ok',NULL);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='UX_facts_meta_client_date_ad_nz' AND object_id=OBJECT_ID('dbo.facts_meta'))
+BEGIN
+  CREATE UNIQUE INDEX [UX_facts_meta_client_date_ad_nz]
+  ON dbo.facts_meta(client_id, [date], ad_id_nz);
+  INSERT INTO @actions VALUES('create-unique-index','UX_facts_meta_client_date_ad_nz','ok',NULL);
+END;
+
+SELECT step, detail, status, rows FROM @actions;
+`;
+        let result = await sqlPool.request().query(schemaSql);
+        actions.push(...result.recordset);
+
+        // 3) ads table
+        result = await sqlPool
+            .request()
+            .query("SELECT 1 FROM sys.tables WHERE name='ads'");
+        if (result.recordset.length === 0) {
+            await sqlPool.request().query(`CREATE TABLE dbo.ads(
+    ad_id NVARCHAR(100) NOT NULL PRIMARY KEY,
+    client_id UNIQUEIDENTIFIER NOT NULL,
+    name NVARCHAR(255) NULL,
+    ad_name_norm NVARCHAR(255) NULL,
+    ad_preview_link NVARCHAR(1000) NULL,
+    ad_creative_thumbnail_url NVARCHAR(1000) NULL,
+    created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+);`);
+            actions.push({ step: 'create-table', detail: 'ads', status: 'ok' });
+        } else {
+            actions.push({ step: 'create-table', detail: 'ads', status: 'exists' });
+        }
+        result = await sqlPool
+            .request()
+            .query("SELECT 1 FROM sys.indexes WHERE name='IX_ads_client_adname' AND object_id=OBJECT_ID('dbo.ads')");
+        if (result.recordset.length === 0) {
+            await sqlPool
+                .request()
+                .query('CREATE INDEX IX_ads_client_adname ON dbo.ads(client_id, ad_name_norm);');
+            actions.push({ step: 'create-index', detail: 'IX_ads_client_adname on ads', status: 'ok' });
+        } else {
+            actions.push({ step: 'create-index', detail: 'IX_ads_client_adname on ads', status: 'exists' });
+        }
+
+        // 4) Auxiliary tables
+        result = await sqlPool
+            .request()
+            .query("SELECT 1 FROM sys.tables WHERE name='import_history'");
+        if (result.recordset.length === 0) {
+            await sqlPool.request().query(`CREATE TABLE dbo.import_history(
+    id BIGINT IDENTITY(1,1) PRIMARY KEY,
+    source NVARCHAR(50) NOT NULL,
+    payload NVARCHAR(MAX) NULL,
+    created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+);`);
+            actions.push({ step: 'create-table', detail: 'import_history', status: 'ok' });
+        } else {
+            actions.push({ step: 'create-table', detail: 'import_history', status: 'exists' });
+        }
+        result = await sqlPool
+            .request()
+            .query("SELECT 1 FROM sys.tables WHERE name='processed_files_hashes'");
+        if (result.recordset.length === 0) {
+            await sqlPool.request().query(`CREATE TABLE dbo.processed_files_hashes(
+    id BIGINT IDENTITY(1,1) PRIMARY KEY,
+    file_hash NVARCHAR(128) NOT NULL,
+    created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+);`);
+            actions.push({ step: 'create-table', detail: 'processed_files_hashes', status: 'ok' });
+        } else {
+            actions.push({ step: 'create-table', detail: 'processed_files_hashes', status: 'exists' });
+        }
+
+        logger.info('[SQL][EnsureSchema] end');
+        res.json({ ok: true, actions, db: sqlPool.config.database, schema: 'dbo' });
     } catch (error) {
         logger.error('[SQL][EnsureSchema] error', error);
-        res.status(500).json({ ok: false, error: error.message });
+        res.status(500).json({ ok: false, error: error.message, actions });
     }
 });
 
+// Diagnostics route
 app.get('/api/sql/diagnostics', async (req, res) => {
     if (!sqlPool) {
         return res.status(400).json({ error: 'Not connected' });
@@ -987,7 +1159,6 @@ app.get('/api/sql/diagnostics', async (req, res) => {
     logger.info('[SQL][Diagnostics] start');
     const schemaChecks = [];
     const stats = {};
-    let staging = [];
     try {
         const checkTable = async (table, columns = [], indexes = [], fk = null) => {
             const exists = (await sqlPool
@@ -1025,9 +1196,6 @@ app.get('/api/sql/diagnostics', async (req, res) => {
         const existsClients = await checkTable('clients', ['client_id', 'name', 'name_norm'], ['UQ_clients_name_norm']);
         const existsFacts = await checkTable('facts_meta', ['client_id', 'date', 'ad_id', 'ad_id_nz'], ['UX_facts_meta_client_date_ad_nz'], 'FK_facts_meta_clients');
         const existsAds = await checkTable('ads', ['ad_id', 'client_id', 'ad_name_norm'], ['IX_ads_client_adname']);
-        const existsImportHistory = await checkTable('import_history', ['batch_data']);
-        const existsProcessed = await checkTable('processed_files_hashes', ['file_hash']);
-        const existsStaging = await checkTable('_staging_facts', ['session_id','client_id','date'], ['IX__staging_facts_session']);
 
         if (existsClients) {
             const r = await sqlPool.request().query('SELECT COUNT(*) AS c FROM dbo.clients');
@@ -1047,108 +1215,12 @@ app.get('/api/sql/diagnostics', async (req, res) => {
             const r = await sqlPool.request().query('SELECT COUNT(*) AS c FROM dbo.ads');
             stats.ads = { count: r.recordset[0].c };
         }
-        if (existsImportHistory) {
-            const r = await sqlPool.request().query('SELECT COUNT(*) AS c FROM dbo.import_history');
-            stats.import_history = { count: r.recordset[0].c };
-        }
-        if (existsProcessed) {
-            const r = await sqlPool.request().query('SELECT COUNT(*) AS c FROM dbo.processed_files_hashes');
-            stats.processed_files_hashes = { count: r.recordset[0].c };
-        }
-        if (existsStaging) {
-            const r = await sqlPool.request().query('SELECT session_id, COUNT(*) AS count FROM dbo._staging_facts GROUP BY session_id');
-            staging = r.recordset;
-        }
 
         logger.info('[SQL][Diagnostics] end');
-        res.json({ db: sqlPool.config.database, schemaChecks, stats, staging });
+        res.json({ db: sqlPool.config.database, schema: 'dbo', schemaChecks, stats });
     } catch (error) {
         logger.error('[SQL][Diagnostics] error', error);
         res.status(500).json({ error: error.message });
-    }
-});
-
-// --- SQL data retrieval endpoints ---
-
-// Fetch clients from connected SQL Server
-app.get('/api/sql/clients', async (req, res) => {
-    if (!sqlPool) {
-        return res.status(400).json({ success: false, error: 'Not connected' });
-    }
-    try {
-        const result = await sqlPool
-            .request()
-            .query('SELECT client_id, name, name_norm FROM dbo.clients ORDER BY name');
-        const clients = result.recordset.map(row => ({
-            id: row.client_id,
-            name: row.name,
-            nameNorm: row.name_norm
-        }));
-        res.json({ success: true, data: clients, count: clients.length });
-    } catch (error) {
-        logger.error('[SQL] Error loading clients:', error);
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-
-// Fetch performance data grouped by client from SQL Server
-app.get('/api/sql/performance', async (req, res) => {
-    if (!sqlPool) {
-        return res.status(400).json({ success: false, error: 'Not connected' });
-    }
-    try {
-        const result = await sqlPool
-            .request()
-            .query('SELECT client_id, [date], ad_id, campaign_id, adset_id, impressions, clicks, spend, purchases, roas FROM dbo.facts_meta');
-
-        const data = {};
-        result.recordset.forEach(row => {
-            const cid = row.client_id;
-            if (!data[cid]) data[cid] = [];
-            data[cid].push({
-                clientId: cid,
-                uniqueId: `${row.date?.toISOString?.().slice(0,10) || row.date}_${row.ad_id || ''}`,
-                campaignName: row.campaign_id || '',
-                adSetName: row.adset_id || '',
-                adName: row.ad_id || '',
-                day: row.date ? row.date.toISOString().slice(0,10) : '',
-                age: '',
-                gender: '',
-                spend: Number(row.spend) || 0,
-                campaignDelivery: '',
-                adSetDelivery: '',
-                adDelivery: '',
-                impressions: Number(row.impressions) || 0,
-                reach: 0,
-                frequency: 0,
-                purchases: Number(row.purchases) || 0,
-                landingPageViews: 0,
-                clicksAll: Number(row.clicks) || 0,
-                cpm: 0,
-                ctrAll: 0,
-                cpcAll: 0,
-                videoPlays3s: 0,
-                checkoutsInitiated: 0
-            });
-        });
-
-        res.json({ success: true, data });
-    } catch (error) {
-        logger.error('[SQL] Error loading performance:', error);
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-
-app.post('/api/sql/cleanup-staging', async (req, res) => {
-    if (!sqlPool) {
-        return res.status(400).json({ ok: false, error: 'Not connected' });
-    }
-    try {
-        const r = await sqlPool.request().query(`DELETE FROM dbo._staging_facts WHERE created_at < DATEADD(day,-1,SYSUTCDATETIME()); SELECT @@ROWCOUNT AS deleted;`);
-        res.json({ deletedCount: r.recordset[0].deleted });
-    } catch (error) {
-        logger.error('[SQL][CleanupStaging] error', error);
-        res.status(500).json({ ok: false, error: error.message });
     }
 });
 

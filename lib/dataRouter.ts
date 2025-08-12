@@ -17,7 +17,7 @@ const normalizeClients = (data: any): Client[] => {
   if (Array.isArray(data?.data)) return data.data;
   if (Array.isArray(data?.clients)) return data.clients;
   if (data && typeof data === 'object') {
-    return Object.values(data).filter(v => typeof v === 'object');
+    return Object.values(data).filter(v => typeof v === 'object') as Client[];
   }
   Logger.warn('[FETCH] clients response not array, defaulting to empty');
   return [];

@@ -30,7 +30,7 @@ class Logger {
         this.subscribers.forEach(callback => callback(entry));
         
         // Also log to console for debugging
-        const consoleArgs = [`[${level}] ${message}`];
+        const consoleArgs: any[] = [`[${level}] ${message}`];
         if (context) {
             consoleArgs.push(context);
         }

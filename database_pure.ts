@@ -68,7 +68,7 @@ const db = {
         console.log(`[DB] Executing: SELECT * FROM ${table}`);
         
         // Critical authentication data from localStorage ONLY
-        if (CRITICAL_TABLES.includes(table)) {
+        if (CRITICAL_TABLES.includes(table as typeof CRITICAL_TABLES[number])) {
             try {
                 const localData = localStorage.getItem(`db_${table}`);
                 if (localData) {
@@ -109,7 +109,7 @@ const db = {
         console.log(`[DB] Data size: ${JSON.stringify(data).length} characters`);
 
         // Critical authentication data stays in localStorage for immediate access
-        if (CRITICAL_TABLES.includes(table)) {
+        if (CRITICAL_TABLES.includes(table as typeof CRITICAL_TABLES[number])) {
             try {
                 const dataString = JSON.stringify(data);
                 localStorage.setItem(`db_${table}`, dataString);

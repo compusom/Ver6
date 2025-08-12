@@ -2,67 +2,63 @@ export const TABLES = {
   clients: {
     create: `
         CREATE TABLE clients (
-            id INT IDENTITY(1,1) PRIMARY KEY,
-            name NVARCHAR(255) NOT NULL,
-            name_norm NVARCHAR(255) NOT NULL UNIQUE,
-            created_at DATETIME DEFAULT GETDATE()
-        )
-    `,
-    dependencies: []
-  },
-  facts_meta: {
-    create: `
-        CREATE TABLE facts_meta (
-            client_id INT NOT NULL,
-            [date] DATE NOT NULL,
-            ad_id NVARCHAR(255) NOT NULL,
-            spend DECIMAL(18,2),
-            days_detected INT DEFAULT 0,
-            PRIMARY KEY (client_id, [date], ad_id)
-        )
-    `,
-    dependencies: ['clients']
-  },
-  ads: {
-    create: `
-        CREATE TABLE ads (
-            client_id INT NOT NULL,
-            ad_id NVARCHAR(255) NOT NULL,
-            ad_name_norm NVARCHAR(255) NOT NULL,
-            name NVARCHAR(255),
-            ad_preview_link NVARCHAR(MAX),
-            ad_creative_thumbnail_url NVARCHAR(MAX),
-            PRIMARY KEY (client_id, ad_id),
-            UNIQUE (client_id, ad_name_norm)
-        )
-    `,
-    dependencies: ['clients']
-  },
-  clientes: {
-    create: `
-        CREATE TABLE clientes (
-            id_cliente INT IDENTITY(1,1) PRIMARY KEY,
-            nombre_cuenta VARCHAR(255) UNIQUE NOT NULL,
+            client_id INT IDENTITY(1,1) PRIMARY KEY,
+            name VARCHAR(255) UNIQUE NOT NULL,
+            token VARCHAR(255),
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     `,
     dependencies: []
   },
+  ads: {
+    create: `
+        CREATE TABLE ads (
+            ad_id BIGINT PRIMARY KEY,
+            client_id INT NOT NULL,
+            ad_name VARCHAR(255),
+            ad_preview_link TEXT,
+            ad_creative_thumbnail_url TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (client_id) REFERENCES clients(client_id)
+        )
+    `,
+    dependencies: ['clients']
+  },
+  facts_meta: {
+    create: `
+        CREATE TABLE facts_meta (
+            client_id INT NOT NULL,
+            ad_id BIGINT NOT NULL,
+            campaign_id BIGINT,
+            adset_id BIGINT,
+            impressions INT,
+            clicks INT,
+            spend DECIMAL(10, 2),
+            purchases INT,
+            roas DECIMAL(10, 4),
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            ad_id_nz BIGINT,
+            FOREIGN KEY (client_id) REFERENCES clients(client_id),
+            FOREIGN KEY (ad_id) REFERENCES ads(ad_id)
+        )
+    `,
+    dependencies: ['clients', 'ads']
+  },
   archivos_reporte: {
     create: `
         CREATE TABLE archivos_reporte (
             id_reporte INT IDENTITY(1,1) PRIMARY KEY,
-            id_cliente INT NOT NULL,
+            client_id INT NOT NULL,
             nombre_archivo VARCHAR(255),
             hash_archivo CHAR(64) UNIQUE NOT NULL,
             period_start DATE,
             period_end DATE,
             days_detected INT,
             uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (id_cliente) REFERENCES clientes(id_cliente)
+            FOREIGN KEY (client_id) REFERENCES clients(client_id)
         )
     `,
-    dependencies: ['clientes']
+    dependencies: ['clients']
   },
   metricas: {
     create: `
@@ -155,30 +151,30 @@ export const TABLES = {
     create: `
         CREATE TABLE archivos_url (
             id_url INT IDENTITY(1,1) PRIMARY KEY,
-            id_cliente INT NOT NULL,
+            client_id INT NOT NULL,
             nombre_archivo VARCHAR(255),
             hash_archivo CHAR(64) UNIQUE NOT NULL,
             uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (id_cliente) REFERENCES clientes(id_cliente)
+            FOREIGN KEY (client_id) REFERENCES clients(client_id)
         )
     `,
-    dependencies: ['clientes']
+    dependencies: ['clients']
   },
   vistas_preview: {
     create: `
         CREATE TABLE vistas_preview (
-            id_cliente INT NOT NULL,
+            client_id INT NOT NULL,
             [Account name] VARCHAR(255),
             [Ad name] VARCHAR(255),
             [Reach] BIGINT,
             [Ad Preview Link] TEXT,
             [Ad Creative Thumbnail Url] TEXT,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (id_cliente, [Ad name]),
-            FOREIGN KEY (id_cliente) REFERENCES clientes(id_cliente)
+            PRIMARY KEY (client_id, [Ad name]),
+            FOREIGN KEY (client_id) REFERENCES clients(client_id)
         )
     `,
-    dependencies: ['clientes']
+    dependencies: ['clients']
   },
   processed_files_hashes: {
     create: `
@@ -213,6 +209,7 @@ export const TABLES = {
     create: `
         CREATE TABLE import_history (
             id INT IDENTITY(1,1) PRIMARY KEY,
+            source VARCHAR(50) NOT NULL DEFAULT 'sql',
             batch_data NVARCHAR(MAX) NOT NULL,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )

@@ -12,6 +12,6 @@ describe('NotificationProvider', () => {
     );
     notify('hola');
     const el = await screen.findByText('hola');
-    expect(el).toBeInTheDocument();
+    expect(el).toBeTruthy();
   });
 });

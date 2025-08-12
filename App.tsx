@@ -24,7 +24,7 @@ import { processPerformanceData } from './lib/dataProcessor';
 import { CreativeAnalysisView } from './components/CreativeAnalysisView';
 import { DataDiagnosticsModal } from './components/DataDiagnosticsModal';
 import { getClients, getPerformance } from './lib/dataRouter';
-import { DataSourceProvider, useDataSource } from './context/DataSourceContext';
+import { useDataSource } from './context/DataSourceContext';
 
 const fileToGenerativePart = async (file: File) => {
     const base64EncodedDataPromise = new Promise<string>((resolve, reject) => {
@@ -1098,10 +1098,5 @@ Responde ÚNICAMENTE en formato JSON estructurado según el esquema proporcionad
     return renderMainContent();
 };
 
-export default function AppWithProvider(props) {
-    return (
-        <DataSourceProvider>
-            <App {...props} />
-        </DataSourceProvider>
-    );
-}
+export default App;
+

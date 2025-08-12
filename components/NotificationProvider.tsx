@@ -7,13 +7,18 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const [notifications, setNotifications] = useState<InternalNotification[]>([]);
 
   useEffect(() => {
-    return onNotify((n) => {
+    const unsubscribe = onNotify((n) => {
       const id = Date.now() + Math.random();
       setNotifications((prev) => [...prev, { ...n, id }]);
       setTimeout(() => {
         setNotifications((prev) => prev.filter((not) => not.id !== id));
       }, 3000);
     });
+    return () => {
+      if (typeof unsubscribe === 'function') {
+        unsubscribe();
+      }
+    };
   }, []);
 
   return (

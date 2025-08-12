@@ -6,7 +6,7 @@ interface FormatSelectorProps {
     onSelectFormat: (format: FormatGroup) => void;
 }
 
-const formats: { id: FormatGroup, name: string, description: string, icon: JSX.Element }[] = [
+const formats: { id: FormatGroup, name: string, description: string, icon: React.ReactElement }[] = [
     { 
         id: 'SQUARE_LIKE', 
         name: 'Formatos Cuadrados/Rectangulares',

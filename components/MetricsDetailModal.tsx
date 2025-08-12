@@ -125,7 +125,7 @@ const FunnelStep: React.FC<{label: string, value: number, prevValue: number | nu
     
     const dropOff = prevValue !== null && prevValue > 0 ? 100 - ((value / prevValue) * 100) : 0;
     
-    const getDropOffStatus = (dropOff: number): { color: string; icon: JSX.Element } => {
+    const getDropOffStatus = (dropOff: number): { color: string; icon: React.ReactElement } => {
         if (dropOff > 50) {
             return {
                 color: 'bg-red-500/20 text-red-300',

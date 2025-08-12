@@ -135,7 +135,7 @@ export const ImportView: React.FC<ImportViewProps> = ({
         try {
             const backendPort = localStorage.getItem('backend_port') || '3001';
             let importUrl = `http://localhost:${backendPort}/api/sql/import-excel`;
-            if (confirmCreate) importUrl += '?confirmCreate=1';
+            if (confirmCreate) importUrl += '?allowCreateClient=true';
             addLog(`Conectando a ${importUrl}`);
             await ensureSqlConnected();
             addLog('Conexión SQL verificada');
@@ -178,28 +178,109 @@ export const ImportView: React.FC<ImportViewProps> = ({
     const ConfirmSqlClientModal = () => {
         if (!pendingSqlClient) return null;
         return (
-            <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-                <div className="bg-white rounded-lg p-8 shadow-lg max-w-md w-full">
-                    <h2 className="text-lg font-bold mb-4">Confirmar creación de cliente</h2>
-                    <p>El cliente <b>{pendingSqlClient.accountName}</b> no existe en SQL.<br />¿Deseas crearlo y continuar con la importación?</p>
-                    <div className="mt-6 flex gap-4 justify-end">
-                        <button
-                            className="bg-brand-primary text-white px-4 py-2 rounded-lg font-bold"
-                            onClick={async () => {
-                                setPendingSqlClient(null);
-                                setIsProcessing(true);
-                                setFeedback({ type: 'info', message: 'Creando cliente y reintentando importación...' });
-                                await importExcelToSQL(pendingSqlClient.file, true);
-                            }}
-                        >Crear y continuar</button>
-                        <button
-                            className="bg-brand-border text-brand-text px-4 py-2 rounded-lg font-bold"
-                            onClick={() => {
-                                setPendingSqlClient(null);
-                                setFeedback({ type: 'error', message: 'Importación cancelada. No se creó el cliente.' });
-                                addLog('Importación cancelada por el usuario.');
-                            }}
-                        >Cancelar</button>
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                <div className="bg-brand-surface rounded-xl border border-brand-border max-w-lg w-full shadow-2xl">
+                    {/* Header */}
+                    <div className="bg-gradient-to-r from-brand-primary to-brand-accent p-6 rounded-t-xl">
+                        <h2 className="text-xl font-bold text-white mb-2">🆕 Crear Nuevo Cliente</h2>
+                        <p className="text-white/90 text-sm">Se detectó un cliente que no existe en la base de datos</p>
+                    </div>
+                    
+                    {/* Content */}
+                    <div className="p-6">
+                        <div className="bg-brand-bg/50 rounded-lg p-4 mb-6">
+                            <div className="flex items-center gap-3 mb-3">
+                                <div className="w-3 h-3 bg-yellow-400 rounded-full animate-pulse"></div>
+                                <span className="text-brand-text font-medium">Cliente detectado en Excel:</span>
+                            </div>
+                            <div className="bg-brand-surface rounded-lg p-3 border border-brand-border">
+                                <code className="text-brand-primary font-mono text-sm break-all">
+                                    {pendingSqlClient.accountName}
+                                </code>
+                            </div>
+                        </div>
+
+                        <div className="space-y-4 mb-6">
+                            <div>
+                                <label className="block text-sm font-medium text-brand-text mb-2">
+                                    📝 Nombre del Cliente
+                                </label>
+                                <input
+                                    type="text"
+                                    value={pendingSqlClient.accountName}
+                                    readOnly
+                                    className="w-full bg-brand-bg border border-brand-border text-brand-text rounded-lg px-3 py-2 text-sm"
+                                />
+                                <p className="text-xs text-brand-text-secondary mt-1">
+                                    Este será el nombre registrado en la base de datos
+                                </p>
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-brand-text mb-2">
+                                    💰 Moneda
+                                </label>
+                                <select 
+                                    className="w-full bg-brand-bg border border-brand-border text-brand-text rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-primary/50 focus:border-brand-primary transition-colors"
+                                    defaultValue="EUR"
+                                >
+                                    <option value="EUR">EUR - Euro</option>
+                                    <option value="USD">USD - Dólar Americano</option>
+                                    <option value="GBP">GBP - Libra Esterlina</option>
+                                    <option value="CAD">CAD - Dólar Canadiense</option>
+                                    <option value="AUD">AUD - Dólar Australiano</option>
+                                    <option value="MXN">MXN - Peso Mexicano</option>
+                                    <option value="BRL">BRL - Real Brasileño</option>
+                                    <option value="CLP">CLP - Peso Chileno</option>
+                                </select>
+                                <p className="text-xs text-brand-text-secondary mt-1">
+                                    Moneda que se usará para los reportes de este cliente
+                                </p>
+                            </div>
+                        </div>
+
+                        <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4 mb-6">
+                            <div className="flex items-start gap-3">
+                                <div className="text-blue-400 mt-0.5">ℹ️</div>
+                                <div>
+                                    <p className="text-brand-text text-sm font-medium mb-1">
+                                        ¿Qué va a pasar?
+                                    </p>
+                                    <ul className="text-brand-text-secondary text-xs space-y-1">
+                                        <li>• Se creará el cliente en la base de datos SQL</li>
+                                        <li>• Se procesarán todos los datos del Excel</li>
+                                        <li>• Los datos se vincularán automáticamente al cliente</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Actions */}
+                        <div className="flex gap-3">
+                            <button
+                                className="flex-1 bg-gradient-to-r from-brand-primary to-brand-accent hover:from-brand-primary-hover hover:to-brand-accent text-white px-4 py-3 rounded-lg font-bold transition-all duration-200 transform hover:scale-[1.02] active:scale-[0.98] shadow-lg hover:shadow-glow"
+                                onClick={async () => {
+                                    setPendingSqlClient(null);
+                                    setIsProcessing(true);
+                                    setFeedback({ type: 'info', message: 'Creando cliente y procesando datos...' });
+                                    await importExcelToSQL(pendingSqlClient.file, true);
+                                }}
+                            >
+                                <div className="flex items-center justify-center gap-2">
+                                    <span>✅ Crear Cliente e Importar</span>
+                                </div>
+                            </button>
+                            <button
+                                className="bg-brand-bg hover:bg-brand-border border border-brand-border text-brand-text px-4 py-3 rounded-lg font-medium transition-colors"
+                                onClick={() => {
+                                    setPendingSqlClient(null);
+                                    setFeedback({ type: 'error', message: 'Importación cancelada por el usuario.' });
+                                    addLog('Importación cancelada por el usuario.');
+                                }}
+                            >
+                                ❌ Cancelar
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -410,7 +491,7 @@ export const ImportView: React.FC<ImportViewProps> = ({
                 await processAndSaveLookerData(file, safeClients);
             } else {
                 if (importMode === 'sql') {
-                    await importExcelToSQL(file);
+                    await importExcelToSQL(file, true); // Always allow client creation
                 } else {
                     const checkResult = await processPerformanceData(file, safeClients, safePerformanceData, source, true);
                     if ('newAccountNames' in checkResult && checkResult.newAccountNames.length > 0) {

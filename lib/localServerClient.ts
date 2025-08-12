@@ -5,7 +5,7 @@
  * Reemplaza el almacenamiento en localStorage/IndexedDB por almacenamiento en servidor
  */
 
-const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:3001';
+const SERVER_URL = (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_SERVER_URL) || 'http://localhost:3001';
 
 export class LocalServerClient {
     private baseUrl: string;
