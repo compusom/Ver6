@@ -15,7 +15,7 @@ export async function importMetaReport(data: ArrayBuffer, db: MetaDb) {
   const hash = crypto.createHash('sha256').update(Buffer.from(data)).digest('hex');
   if (await db.hasFileHash(hash)) {
     Logger.info('[importMetaReport] File already processed');
-    return { parsed: 0, valid: 0, missing_date: 0, missing_ad_name: 0 };
+    return { parsed: 0, valid: 0, skipped: 0, missing_date: 0, missing_ad_name: 0, totals_row_skipped: 0 };
   }
   const workbook = read(data, { type: 'array' });
   const sheet = workbook.Sheets['Raw Data Report'] || workbook.Sheets[workbook.SheetNames[0]];
@@ -23,13 +23,28 @@ export async function importMetaReport(data: ArrayBuffer, db: MetaDb) {
 
   if (rows.length < 2) {
     Logger.warn('[importMetaReport] No rows in file');
-    return { parsed: 0, valid: 0, missing_date: 0, missing_ad_name: 0 };
+    return { parsed: 0, valid: 0, skipped: 0, missing_date: 0, missing_ad_name: 0, totals_row_skipped: 0 };
   }
 
   const headerRow = rows[0].map(h => String(h ?? ''));
   const dataRows = rows.slice(1);
 
   const canonical = mapHeaders(headerRow);
+
+  // detect currency
+  let detectedCurrency: string | undefined;
+  const currencyIdx = canonical.indexOf('currency_code');
+  if (currencyIdx >= 0) {
+    const val = dataRows[0][currencyIdx];
+    if (val) detectedCurrency = String(val).trim().toUpperCase();
+  }
+  if (!detectedCurrency) {
+    const spendIdx = canonical.indexOf('spend');
+    if (spendIdx >= 0) {
+      const m = headerRow[spendIdx]?.match(/\((\w{3})\)/);
+      if (m) detectedCurrency = m[1].toUpperCase();
+    }
+  }
 
   // prepare first row to resolve client
   const firstObj: any = {};
@@ -45,12 +60,15 @@ export async function importMetaReport(data: ArrayBuffer, db: MetaDb) {
     rl.close();
     if (answer !== 'y') {
       Logger.warn('[importMetaReport] Aborted import - client not created');
-      return { parsed: 0, valid: 0, missing_date: 0, missing_ad_name: 0 };
+      return { parsed: 0, valid: 0, skipped: 0, missing_date: 0, missing_ad_name: 0, totals_row_skipped: 0 };
     }
-    client = { id: '', name: String(rawName), nameNorm, logo: '', currency: '', userId: '' };
-    const id = await db.createClient({ name: client.name, nameNorm });
+    client = { id: '', name: String(rawName), nameNorm, logo: '', currency: detectedCurrency || '', userId: '' };
+    const id = await db.createClient({ name: client.name, nameNorm, currencyCode: detectedCurrency });
     client.id = id;
     Logger.info(`[importMetaReport] Created client ${client.name} (${id})`);
+  } else if (detectedCurrency) {
+    await db.setClientCurrencyIfNull(client.id, detectedCurrency);
+    if (!client.currency) client.currency = detectedCurrency;
   }
 
   const adMap: Map<string, MetaAdRow> = new Map();
@@ -60,6 +78,8 @@ export async function importMetaReport(data: ArrayBuffer, db: MetaDb) {
   let missing_date = 0;
   let missing_ad_name = 0;
   let synthetic_ad_id = 0;
+  let skipped = 0;
+  let totals_row_skipped = 0;
   const examples: Record<string, any> = {};
 
   for (const arr of dataRows) {
@@ -78,13 +98,21 @@ export async function importMetaReport(data: ArrayBuffer, db: MetaDb) {
 
     const date = obj['date'];
     const adName = obj['ad_name'];
+    if (!date && !adName) {
+      totals_row_skipped++;
+      skipped++;
+      if (!examples.totals_row_skipped) examples.totals_row_skipped = obj;
+      continue;
+    }
     if (!date) {
       missing_date++;
+      skipped++;
       if (!examples.missing_date) examples.missing_date = obj;
       continue;
     }
     if (!adName) {
       missing_ad_name++;
+      skipped++;
       if (!examples.missing_ad_name) examples.missing_ad_name = obj;
       continue;
     }
@@ -126,10 +154,11 @@ export async function importMetaReport(data: ArrayBuffer, db: MetaDb) {
   await db.saveFileHash(hash);
 
   Logger.info(
-    `[importMetaReport] parsed=${parsed} valid=${valid} missing_date=${missing_date} missing_ad_name=${missing_ad_name} synthetic_ad_id=${synthetic_ad_id} staging_rows_inserted=${stagingInserted} merge_rows_ready=${mergeResult.ready} merge_inserted=${mergeResult.inserted} merge_updated=${mergeResult.updated} adsIns=${adsResult.inserted} adsUpd=${adsResult.updated}`
+    `[importMetaReport] parsed=${parsed} valid=${valid} skipped=${skipped} totals_row=${totals_row_skipped} missing_date=${missing_date} missing_ad_name=${missing_ad_name} synthetic_ad_id=${synthetic_ad_id} staging_rows_inserted=${stagingInserted} merge_rows_ready=${mergeResult.ready} merge_inserted=${mergeResult.inserted} merge_updated=${mergeResult.updated} adsIns=${adsResult.inserted} adsUpd=${adsResult.updated}`
   );
+  if (examples.totals_row_skipped) Logger.info('[importMetaReport] example totals_row_skipped', examples.totals_row_skipped);
   if (examples.missing_date) Logger.info('[importMetaReport] example missing_date', examples.missing_date);
   if (examples.missing_ad_name) Logger.info('[importMetaReport] example missing_ad_name', examples.missing_ad_name);
-  return { parsed, valid, missing_date, missing_ad_name };
+  return { parsed, valid, skipped, missing_date, missing_ad_name, totals_row_skipped };
 }
 export default importMetaReport;

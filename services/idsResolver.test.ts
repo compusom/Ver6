@@ -9,4 +9,10 @@ describe('idsResolver', () => {
     expect(typeof id1).toBe('bigint');
     expect(id1 < 0n).toBe(true);
   });
+
+  it('is case-insensitive', () => {
+    const id1 = synthAdId('Acct', 'Camp', 'Set', 'Ad');
+    const id2 = synthAdId('acct', 'camp', 'set', 'ad');
+    expect(id1).toBe(id2);
+  });
 });

@@ -10,6 +10,10 @@ describe('valueParsers', () => {
     expect(toDateISO('31/07/2025')).toBe('2025-07-31');
   });
 
+  it('rejects unsupported date formats', () => {
+    expect(toDateISO('07-31-2025')).toBeNull();
+  });
+
   it('parses percentages', () => {
     expect(toPct('5,43')).toBeCloseTo(0.0543);
     expect(toPct('0,54')).toBeCloseTo(0.54);
