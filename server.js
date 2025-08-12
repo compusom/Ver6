@@ -43,6 +43,101 @@ let sqlPool = null;
 const TABLE_CREATION_ORDER = getCreationOrder();
 const TABLE_DELETION_ORDER = getDeletionOrder();
 
+/**
+ * Common function to ensure complete SQL schema using sqlTables.js definitions
+ * @param {Object} sqlPool - The SQL connection pool
+ * @param {Function} logger - Logger instance
+ * @returns {Object} - Result object with actions and status
+ */
+async function ensureCompleteSchema(sqlPool, logger) {
+    const actions = [];
+    
+    // Import the complete schema from sqlTables.js
+    const { TABLES, getCreationOrder } = await import('./sqlTables.js');
+    const tablesOrder = getCreationOrder();
+    
+    logger.info(`[SQL][Schema] Tables to create in order:`, tablesOrder);
+    
+    // Create schema step by step
+    for (const tableName of tablesOrder) {
+        const tableConfig = TABLES[tableName];
+        logger.info(`[SQL][Schema] Processing table: ${tableName}`);
+        
+        try {
+            // Check if table exists
+            const checkTableQuery = `
+                SELECT COUNT(*) as count 
+                FROM INFORMATION_SCHEMA.TABLES 
+                WHERE TABLE_NAME = '${tableName}' AND TABLE_SCHEMA = 'dbo'
+            `;
+            const tableExists = await sqlPool.request().query(checkTableQuery);
+            
+            if (tableExists.recordset[0].count === 0) {
+                logger.info(`[SQL][Schema] Creating table: ${tableName}`);
+                
+                // Use the exact SQL from sqlTables.js
+                let createSQL = tableConfig.create;
+                
+                await sqlPool.request().query(createSQL);
+                logger.info(`[SQL][Schema] ✅ Table ${tableName} created successfully`);
+                actions.push({ step: 'create-table', detail: tableName, status: 'ok', rows: null });
+            } else {
+                logger.info(`[SQL][Schema] Table ${tableName} already exists`);
+                actions.push({ step: 'check-table', detail: tableName, status: 'exists', rows: null });
+                
+                // For clients table, ensure we have the 'Unassigned' client
+                if (tableName === 'clients') {
+                    try {
+                        const unassignedCheck = await sqlPool.request().query(
+                            "SELECT COUNT(*) as count FROM clients WHERE name = 'Unassigned'"
+                        );
+                        
+                        if (unassignedCheck.recordset[0].count === 0) {
+                            await sqlPool.request().query(
+                                "INSERT INTO clients (name) VALUES ('Unassigned')"
+                            );
+                            logger.info(`[SQL][Schema] ✅ Created 'Unassigned' client`);
+                            actions.push({ step: 'create-default-client', detail: 'Unassigned', status: 'ok', rows: 1 });
+                        }
+                    } catch (clientError) {
+                        logger.warn(`[SQL][Schema] Warning creating Unassigned client:`, clientError.message);
+                        actions.push({ step: 'create-default-client', detail: 'Unassigned', status: 'error', rows: null });
+                    }
+                }
+            }
+            
+        } catch (tableError) {
+            logger.error(`[SQL][Schema] ❌ Error processing table ${tableName}:`, tableError.message);
+            actions.push({ step: 'create-table', detail: tableName, status: 'error', rows: null });
+            // Continue with other tables instead of stopping completely
+            continue;
+        }
+    }
+    
+    // Final verification: check which tables were actually created
+    const finalTablesQuery = `
+        SELECT TABLE_NAME 
+        FROM INFORMATION_SCHEMA.TABLES 
+        WHERE TABLE_SCHEMA = 'dbo' 
+        ORDER BY TABLE_NAME
+    `;
+    const finalTables = await sqlPool.request().query(finalTablesQuery);
+    logger.info(`[SQL][Schema] Final tables in database:`, finalTables.recordset.map(t => t.TABLE_NAME));
+    
+    actions.push({ 
+        step: 'final-verification', 
+        detail: `${finalTables.recordset.length} tables total`, 
+        status: 'ok', 
+        rows: finalTables.recordset.length 
+    });
+
+    return {
+        success: true,
+        actions,
+        tablesCreated: finalTables.recordset.length
+    };
+}
+
 // Helper to normalize column names to match SQL schema
 const normalizeKey = key =>
     key
@@ -625,156 +720,11 @@ app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
     logger.info(`[SQL] File path: ${req.file.path}`);
     logger.info(`[SQL] Allow create client: ${allowCreateClient}`);
     
-    // Ensure tables exist before importing - use modern schema
+    // Ensure tables exist before importing - use complete schema
     logger.info(`[SQL] Step 1: Ensuring SQL tables exist...`);
     try {
-        // Execute schema creation step by step with detailed logging
-        logger.info(`[SQL] Starting step-by-step schema creation...`);
-        
-        // Step 1: Check current table structure
-        logger.info(`[SQL] Step 1.1: Checking existing table structure...`);
-        try {
-            const checkQuery = `
-                SELECT 
-                    TABLE_NAME,
-                    COLUMN_NAME,
-                    DATA_TYPE,
-                    IS_NULLABLE
-                FROM INFORMATION_SCHEMA.COLUMNS 
-                WHERE TABLE_NAME = 'clients'
-                ORDER BY ORDINAL_POSITION
-            `;
-            const existingStructure = await sqlPool.request().query(checkQuery);
-            logger.info(`[SQL] Existing clients table structure:`, existingStructure.recordset);
-        } catch (checkError) {
-            logger.info(`[SQL] No existing clients table found (this is normal for first run):`, checkError.message);
-        }
-        
-        // Step 2: Check for existing constraints
-        logger.info(`[SQL] Step 1.2: Checking existing constraints...`);
-        try {
-            const constraintQuery = `
-                SELECT 
-                    tc.CONSTRAINT_NAME,
-                    tc.CONSTRAINT_TYPE,
-                    kcu.COLUMN_NAME
-                FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
-                JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu 
-                    ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
-                WHERE tc.TABLE_NAME = 'clients'
-            `;
-            const existingConstraints = await sqlPool.request().query(constraintQuery);
-            logger.info(`[SQL] Existing constraints:`, existingConstraints.recordset);
-        } catch (constraintError) {
-            logger.info(`[SQL] No existing constraints found:`, constraintError.message);
-        }
-        
-        // Step 3: Check for existing indexes
-        logger.info(`[SQL] Step 1.3: Checking existing indexes...`);
-        try {
-            const indexQuery = `
-                SELECT 
-                    i.name AS IndexName,
-                    i.type_desc AS IndexType,
-                    i.is_unique,
-                    c.name AS ColumnName
-                FROM sys.indexes i
-                JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
-                JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
-                WHERE i.object_id = OBJECT_ID('dbo.clients')
-                ORDER BY i.name, ic.key_ordinal
-            `;
-            const existingIndexes = await sqlPool.request().query(indexQuery);
-            logger.info(`[SQL] Existing indexes:`, existingIndexes.recordset);
-        } catch (indexError) {
-            logger.info(`[SQL] No existing indexes found:`, indexError.message);
-        }
-        
-        // Step 4: Execute the full schema SQL with detailed error handling
-        logger.info(`[SQL] Step 1.4: Executing full schema creation...`);
-        const schemaSql = `
-SET NOCOUNT ON;
-DECLARE @actions TABLE(step NVARCHAR(100), detail NVARCHAR(4000), status NVARCHAR(50), rows INT NULL);
-
-DECLARE @clients_client_id_type NVARCHAR(128);
-DECLARE @facts_client_id_type   NVARCHAR(128);
-
-SELECT @clients_client_id_type = TY.name
-FROM sys.columns C
-JOIN sys.types TY ON TY.user_type_id = C.user_type_id
-WHERE C.object_id = OBJECT_ID('dbo.clients') AND C.name = 'client_id';
-
-SELECT @facts_client_id_type = TY.name
-FROM sys.columns C
-JOIN sys.types TY ON TY.user_type_id = C.user_type_id
-WHERE C.object_id = OBJECT_ID('dbo.facts_meta') AND C.name = 'client_id';
-
-PRINT 'Current client_id type: ' + ISNULL(@clients_client_id_type, 'NULL (table does not exist)');
-
-IF OBJECT_ID('dbo.clients','U') IS NULL
-BEGIN
-  PRINT 'Creating new clients table...';
-  CREATE TABLE dbo.clients(
-    client_id UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID(),
-    name NVARCHAR(255) NOT NULL,
-    name_norm NVARCHAR(255) NOT NULL,
-    created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
-    CONSTRAINT PK_clients PRIMARY KEY (client_id)
-  );
-  INSERT INTO @actions VALUES('create-table','clients','ok',NULL);
-  SET @clients_client_id_type = 'uniqueidentifier';
-  PRINT 'Clients table created successfully';
-END
-ELSE
-BEGIN
-  PRINT 'Clients table already exists, checking structure...';
-END;
-
--- Ensure name_norm column exists
-IF COL_LENGTH('dbo.clients', 'name_norm') IS NULL
-BEGIN
-    PRINT 'Adding name_norm column...';
-    ALTER TABLE dbo.clients ADD name_norm NVARCHAR(255) NOT NULL DEFAULT '';
-    INSERT INTO @actions VALUES('add-column','clients.name_norm','ok',NULL);
-    PRINT 'name_norm column added';
-END
-ELSE
-BEGIN
-    PRINT 'name_norm column already exists';
-END;
-
--- Create unique index on name_norm if it doesn't exist
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='UQ_clients_name_norm' AND object_id=OBJECT_ID('dbo.clients'))
-BEGIN
-    PRINT 'Creating unique index on name_norm...';
-    CREATE UNIQUE INDEX UQ_clients_name_norm ON dbo.clients(name_norm);
-    INSERT INTO @actions VALUES('create-index','UQ_clients_name_norm','ok',NULL);
-    PRINT 'Unique index created';
-END
-ELSE
-BEGIN
-    PRINT 'Unique index on name_norm already exists';
-END;
-
--- Create unassigned client if not exists
-IF NOT EXISTS (SELECT 1 FROM dbo.clients WHERE name_norm = N'unassigned')
-BEGIN
-    PRINT 'Creating unassigned client...';
-    INSERT INTO dbo.clients (client_id, name, name_norm) VALUES (NEWID(), N'Unassigned', N'unassigned');
-    INSERT INTO @actions VALUES('create-default-client','Unassigned','ok',1);
-    PRINT 'Unassigned client created';
-END
-ELSE
-BEGIN
-    PRINT 'Unassigned client already exists';
-END;
-
-SELECT step, detail, status, rows FROM @actions ORDER BY step;
-`;
-        
-        const result = await sqlPool.request().query(schemaSql);
-        logger.info(`[SQL] ✅ Schema SQL executed successfully`);
-        logger.info(`[SQL] Schema creation results:`, result.recordset);
+        const schemaResult = await ensureCompleteSchema(sqlPool, logger);
+        logger.info(`[SQL] ✅ Schema ensured - ${schemaResult.tablesCreated} tables available`);
     } catch (tableError) {
         logger.error(`[SQL] ❌ Table initialization failed:`, tableError);
         logger.error(`[SQL] Error message:`, tableError.message);
@@ -1100,271 +1050,26 @@ app.get('/api/sql/import-history', async (req, res) => {
     }
 });
 
-// Ensure required SQL schema for Meta data
+// Ensure required SQL schema for Meta data - Complete Schema
 app.post('/api/sql/ensure-schema', async (req, res) => {
     if (!sqlPool) {
         return res.status(400).json({ ok: false, error: 'Not connected' });
     }
-    logger.info('[SQL][EnsureSchema] start');
-    const actions = [];
+    logger.info('[SQL][EnsureSchema] Creating complete database schema...');
+    
     try {
-        const schemaSql = `
-SET NOCOUNT ON;
-DECLARE @actions TABLE(step NVARCHAR(100), detail NVARCHAR(4000), status NVARCHAR(50), rows INT NULL);
-
-DECLARE @clients_client_id_type NVARCHAR(128);
-DECLARE @facts_client_id_type   NVARCHAR(128);
-
-SELECT @clients_client_id_type = TY.name
-FROM sys.columns C
-JOIN sys.types TY ON TY.user_type_id = C.user_type_id
-WHERE C.object_id = OBJECT_ID('dbo.clients') AND C.name = 'client_id';
-
-SELECT @facts_client_id_type = TY.name
-FROM sys.columns C
-JOIN sys.types TY ON TY.user_type_id = C.user_type_id
-WHERE C.object_id = OBJECT_ID('dbo.facts_meta') AND C.name = 'client_id';
-
-IF OBJECT_ID('dbo.clients','U') IS NULL
-BEGIN
-  CREATE TABLE dbo.clients(
-    client_id UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID(),
-    name NVARCHAR(255) NOT NULL,
-    name_norm NVARCHAR(255) NOT NULL,
-    created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
-    CONSTRAINT PK_clients PRIMARY KEY (client_id)
-  );
-  INSERT INTO @actions VALUES('create-table','clients','ok',NULL);
-  SET @clients_client_id_type = 'uniqueidentifier';
-END;
-
-IF COL_LENGTH('dbo.clients','client_id') IS NULL AND COL_LENGTH('dbo.clients','id') IS NOT NULL
-BEGIN
-  EXEC sp_rename 'dbo.clients.id', 'client_id', 'COLUMN';
-  INSERT INTO @actions VALUES('rename-column','clients.id -> clients.client_id','ok',NULL);
-  SET @clients_client_id_type = NULL;
-END;
-
-SELECT @clients_client_id_type = TY.name
-FROM sys.columns C
-JOIN sys.types TY ON TY.user_type_id = C.user_type_id
-WHERE C.object_id = OBJECT_ID('dbo.clients') AND C.name = 'client_id';
-
-IF @clients_client_id_type IS NOT NULL AND @clients_client_id_type <> 'uniqueidentifier'
-BEGIN
-  IF COL_LENGTH('dbo.clients','client_id_uid') IS NULL
-    ALTER TABLE dbo.clients ADD client_id_uid UNIQUEIDENTIFIER NULL;
-  UPDATE dbo.clients SET client_id_uid = ISNULL(client_id_uid, NEWID());
-  DECLARE @pk_clients sysname;
-  SELECT @pk_clients = kc.name
-  FROM sys.key_constraints kc
-  WHERE kc.parent_object_id = OBJECT_ID('dbo.clients') AND kc.type='PK';
-  IF @pk_clients IS NOT NULL
-  BEGIN
-    DECLARE @sql NVARCHAR(MAX) = N'ALTER TABLE dbo.clients DROP CONSTRAINT ['+@pk_clients+N']';
-    EXEC sp_executesql @sql;
-  END
-  ALTER TABLE dbo.clients ADD CONSTRAINT PK_clients PRIMARY KEY (client_id_uid);
-  EXEC sp_rename 'dbo.clients.client_id', 'client_id_int', 'COLUMN';
-  EXEC sp_rename 'dbo.clients.client_id_uid', 'client_id', 'COLUMN';
-  INSERT INTO @actions VALUES('migrate-type','clients.client_id int -> uniqueidentifier','ok',NULL);
-  IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='UQ_clients_name_norm' AND object_id=OBJECT_ID('dbo.clients'))
-    CREATE UNIQUE INDEX UQ_clients_name_norm ON dbo.clients(name_norm);
-END
-ELSE
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='UQ_clients_name_norm' AND object_id=OBJECT_ID('dbo.clients'))
-    CREATE UNIQUE INDEX UQ_clients_name_norm ON dbo.clients(name_norm);
-END;
-
-IF OBJECT_ID('dbo.facts_meta','U') IS NULL
-BEGIN
-  CREATE TABLE dbo.facts_meta(
-    fact_id BIGINT IDENTITY(1,1) NOT NULL,
-    client_id UNIQUEIDENTIFIER NULL,
-    [date] DATE NOT NULL,
-    ad_id NVARCHAR(100) NULL,
-    campaign_id NVARCHAR(100) NULL,
-    adset_id NVARCHAR(100) NULL,
-    impressions BIGINT NULL,
-    clicks BIGINT NULL,
-    spend DECIMAL(18,4) NULL,
-    purchases INT NULL,
-    roas DECIMAL(18,4) NULL,
-    created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
-  );
-  INSERT INTO @actions VALUES('create-table','facts_meta','ok',NULL);
-  SET @facts_client_id_type = 'uniqueidentifier';
-END;
-
-IF COL_LENGTH('dbo.facts_meta','ad_id_nz') IS NULL
-BEGIN
-  ALTER TABLE dbo.facts_meta ADD ad_id_nz AS (ISNULL(ad_id,'')) PERSISTED;
-  INSERT INTO @actions VALUES('add-column','facts_meta.ad_id_nz (computed persisted)','ok',NULL);
-END;
-
-IF EXISTS (SELECT 1 FROM sys.indexes WHERE name='UX_facts_meta_client_date_ad_nz' AND object_id=OBJECT_ID('dbo.facts_meta'))
-BEGIN
-  DROP INDEX [UX_facts_meta_client_date_ad_nz] ON dbo.facts_meta;
-  INSERT INTO @actions VALUES('drop-index','UX_facts_meta_client_date_ad_nz','dropped',NULL);
-END;
-
-IF EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name='FK_facts_meta_clients' AND parent_object_id=OBJECT_ID('dbo.facts_meta'))
-BEGIN
-  ALTER TABLE dbo.facts_meta DROP CONSTRAINT [FK_facts_meta_clients];
-  INSERT INTO @actions VALUES('drop-fk','FK_facts_meta_clients','dropped',NULL);
-END;
-
-DECLARE @pk_facts sysname;
-SELECT @pk_facts = kc.name
-FROM sys.key_constraints kc
-JOIN sys.index_columns ic ON ic.object_id = kc.parent_object_id AND ic.index_id = kc.unique_index_id
-JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
-WHERE kc.parent_object_id = OBJECT_ID('dbo.facts_meta')
-  AND kc.type = 'PK'
-  AND c.name = 'client_id';
-
-IF @pk_facts IS NOT NULL
-BEGIN
-  DECLARE @sql2 NVARCHAR(MAX) = N'ALTER TABLE dbo.facts_meta DROP CONSTRAINT ['+@pk_facts+N']';
-  EXEC sp_executesql @sql2;
-  INSERT INTO @actions VALUES('drop-pk-on-client_id',@pk_facts,'dropped',NULL);
-END;
-
-SELECT @facts_client_id_type = TY.name
-FROM sys.columns C
-JOIN sys.types TY ON TY.user_type_id = C.user_type_id
-WHERE C.object_id = OBJECT_ID('dbo.facts_meta') AND C.name = 'client_id';
-
-IF @facts_client_id_type IS NOT NULL AND @facts_client_id_type <> 'uniqueidentifier'
-BEGIN
-  IF COL_LENGTH('dbo.facts_meta','client_id_uid') IS NULL
-    ALTER TABLE dbo.facts_meta ADD client_id_uid UNIQUEIDENTIFIER NULL;
-
-  IF NOT EXISTS (SELECT 1 FROM dbo.clients WHERE name_norm = N'unassigned')
-    INSERT INTO dbo.clients (client_id, name, name_norm) VALUES (NEWID(), N'Unassigned', N'unassigned');
-
-  DECLARE @unassigned UNIQUEIDENTIFIER = (SELECT TOP (1) client_id FROM dbo.clients WHERE name_norm = N'unassigned');
-
-  UPDATE dbo.facts_meta SET client_id_uid = ISNULL(client_id_uid, @unassigned);
-
-  ALTER TABLE dbo.facts_meta DROP COLUMN client_id;
-  EXEC sp_rename 'dbo.facts_meta.client_id_uid', 'client_id', 'COLUMN';
-
-  INSERT INTO @actions VALUES('migrate-type','facts_meta.client_id int -> uniqueidentifier (placeholder)','ok',@@ROWCOUNT);
-END
-ELSE
-BEGIN
-  IF EXISTS (SELECT 1 FROM dbo.facts_meta WHERE client_id IS NULL)
-  BEGIN
-    IF NOT EXISTS (SELECT 1 FROM dbo.clients WHERE name_norm = N'unassigned')
-      INSERT INTO dbo.clients (client_id, name, name_norm) VALUES (NEWID(), N'Unassigned', N'unassigned');
-    DECLARE @unassigned2 UNIQUEIDENTIFIER = (SELECT TOP (1) client_id FROM dbo.clients WHERE name_norm = N'unassigned');
-    UPDATE dbo.facts_meta SET client_id = @unassigned2 WHERE client_id IS NULL;
-    INSERT INTO @actions VALUES('backfill-null','facts_meta.client_id -> Unassigned','ok',@@ROWCOUNT);
-  END
-END;
-
-BEGIN TRY
-  ALTER TABLE dbo.facts_meta ALTER COLUMN client_id UNIQUEIDENTIFIER NOT NULL;
-  INSERT INTO @actions VALUES('alter-not-null','facts_meta.client_id','ok',NULL);
-END TRY
-BEGIN CATCH
-  DECLARE @msg NVARCHAR(4000) = ERROR_MESSAGE();
-  INSERT INTO @actions VALUES('alter-not-null','facts_meta.client_id',@msg,NULL);
-  THROW;
-END CATCH
-
-IF NOT EXISTS (SELECT 1 FROM sys.key_constraints WHERE parent_object_id=OBJECT_ID('dbo.facts_meta') AND type='PK')
-BEGIN
-  ALTER TABLE dbo.facts_meta ADD CONSTRAINT PK_facts_meta PRIMARY KEY (fact_id);
-  INSERT INTO @actions VALUES('create-pk','PK_facts_meta on fact_id','ok',NULL);
-END;
-
-IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name='FK_facts_meta_clients' AND parent_object_id=OBJECT_ID('dbo.facts_meta'))
-BEGIN
-  ALTER TABLE dbo.facts_meta
-    ADD CONSTRAINT [FK_facts_meta_clients] FOREIGN KEY (client_id)
-    REFERENCES dbo.clients(client_id);
-  INSERT INTO @actions VALUES('create-fk','FK_facts_meta_clients','ok',NULL);
-END;
-
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='UX_facts_meta_client_date_ad_nz' AND object_id=OBJECT_ID('dbo.facts_meta'))
-BEGIN
-  CREATE UNIQUE INDEX [UX_facts_meta_client_date_ad_nz]
-  ON dbo.facts_meta(client_id, [date], ad_id_nz);
-  INSERT INTO @actions VALUES('create-unique-index','UX_facts_meta_client_date_ad_nz','ok',NULL);
-END;
-
-SELECT step, detail, status, rows FROM @actions;
-`;
-        let result = await sqlPool.request().query(schemaSql);
-        actions.push(...result.recordset);
-
-        // 3) ads table
-        result = await sqlPool
-            .request()
-            .query("SELECT 1 FROM sys.tables WHERE name='ads'");
-        if (result.recordset.length === 0) {
-            await sqlPool.request().query(`CREATE TABLE dbo.ads(
-    ad_id NVARCHAR(100) NOT NULL PRIMARY KEY,
-    client_id UNIQUEIDENTIFIER NOT NULL,
-    name NVARCHAR(255) NULL,
-    ad_name_norm NVARCHAR(255) NULL,
-    ad_preview_link NVARCHAR(1000) NULL,
-    ad_creative_thumbnail_url NVARCHAR(1000) NULL,
-    created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
-);`);
-            actions.push({ step: 'create-table', detail: 'ads', status: 'ok' });
-        } else {
-            actions.push({ step: 'create-table', detail: 'ads', status: 'exists' });
-        }
-        result = await sqlPool
-            .request()
-            .query("SELECT 1 FROM sys.indexes WHERE name='IX_ads_client_adname' AND object_id=OBJECT_ID('dbo.ads')");
-        if (result.recordset.length === 0) {
-            await sqlPool
-                .request()
-                .query('CREATE INDEX IX_ads_client_adname ON dbo.ads(client_id, ad_name_norm);');
-            actions.push({ step: 'create-index', detail: 'IX_ads_client_adname on ads', status: 'ok' });
-        } else {
-            actions.push({ step: 'create-index', detail: 'IX_ads_client_adname on ads', status: 'exists' });
-        }
-
-        // 4) Auxiliary tables
-        result = await sqlPool
-            .request()
-            .query("SELECT 1 FROM sys.tables WHERE name='import_history'");
-        if (result.recordset.length === 0) {
-            await sqlPool.request().query(`CREATE TABLE dbo.import_history(
-    id BIGINT IDENTITY(1,1) PRIMARY KEY,
-    source NVARCHAR(50) NOT NULL,
-    payload NVARCHAR(MAX) NULL,
-    created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
-);`);
-            actions.push({ step: 'create-table', detail: 'import_history', status: 'ok' });
-        } else {
-            actions.push({ step: 'create-table', detail: 'import_history', status: 'exists' });
-        }
-        result = await sqlPool
-            .request()
-            .query("SELECT 1 FROM sys.tables WHERE name='processed_files_hashes'");
-        if (result.recordset.length === 0) {
-            await sqlPool.request().query(`CREATE TABLE dbo.processed_files_hashes(
-    id BIGINT IDENTITY(1,1) PRIMARY KEY,
-    file_hash NVARCHAR(128) NOT NULL,
-    created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
-);`);
-            actions.push({ step: 'create-table', detail: 'processed_files_hashes', status: 'ok' });
-        } else {
-            actions.push({ step: 'create-table', detail: 'processed_files_hashes', status: 'exists' });
-        }
-
-        logger.info('[SQL][EnsureSchema] end');
-        res.json({ ok: true, actions, db: sqlPool.config.database, schema: 'dbo' });
+        const result = await ensureCompleteSchema(sqlPool, logger);
+        logger.info('[SQL][EnsureSchema] ✅ Complete schema creation process finished');
+        res.json({ 
+            ok: true, 
+            actions: result.actions, 
+            db: sqlPool.config.database, 
+            schema: 'dbo',
+            tablesCreated: result.tablesCreated
+        });
     } catch (error) {
         logger.error('[SQL][EnsureSchema] error', error);
-        res.status(500).json({ ok: false, error: error.message, actions });
+        res.status(500).json({ ok: false, error: error.message, actions: [] });
     }
 });
 
