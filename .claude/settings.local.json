@@ -16,7 +16,8 @@
       "Bash(git pull:*)",
       "Bash(git add:*)",
       "Bash(powershell:*)",
-      "Bash(rm:*)"
+      "Bash(rm:*)",
+      "Bash(npm uninstall:*)"
     ],
     "deny": [],
     "ask": []
