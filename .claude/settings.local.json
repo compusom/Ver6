@@ -11,7 +11,10 @@
       "Bash(npm start)",
       "Bash(node server.js)",
       "Bash(taskkill:*)",
-      "Bash(git rebase:*)"
+      "Bash(git rebase:*)",
+      "Bash(git push:*)",
+      "Bash(git pull:*)",
+      "Bash(git add:*)"
     ],
     "deny": [],
     "ask": []
