@@ -628,7 +628,70 @@ app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
     // Ensure tables exist before importing - use modern schema
     logger.info(`[SQL] Step 1: Ensuring SQL tables exist...`);
     try {
-        // Use the complete SQL schema from ensure-schema endpoint
+        // Execute schema creation step by step with detailed logging
+        logger.info(`[SQL] Starting step-by-step schema creation...`);
+        
+        // Step 1: Check current table structure
+        logger.info(`[SQL] Step 1.1: Checking existing table structure...`);
+        try {
+            const checkQuery = `
+                SELECT 
+                    TABLE_NAME,
+                    COLUMN_NAME,
+                    DATA_TYPE,
+                    IS_NULLABLE
+                FROM INFORMATION_SCHEMA.COLUMNS 
+                WHERE TABLE_NAME = 'clients'
+                ORDER BY ORDINAL_POSITION
+            `;
+            const existingStructure = await sqlPool.request().query(checkQuery);
+            logger.info(`[SQL] Existing clients table structure:`, existingStructure.recordset);
+        } catch (checkError) {
+            logger.info(`[SQL] No existing clients table found (this is normal for first run):`, checkError.message);
+        }
+        
+        // Step 2: Check for existing constraints
+        logger.info(`[SQL] Step 1.2: Checking existing constraints...`);
+        try {
+            const constraintQuery = `
+                SELECT 
+                    tc.CONSTRAINT_NAME,
+                    tc.CONSTRAINT_TYPE,
+                    kcu.COLUMN_NAME
+                FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+                JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu 
+                    ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+                WHERE tc.TABLE_NAME = 'clients'
+            `;
+            const existingConstraints = await sqlPool.request().query(constraintQuery);
+            logger.info(`[SQL] Existing constraints:`, existingConstraints.recordset);
+        } catch (constraintError) {
+            logger.info(`[SQL] No existing constraints found:`, constraintError.message);
+        }
+        
+        // Step 3: Check for existing indexes
+        logger.info(`[SQL] Step 1.3: Checking existing indexes...`);
+        try {
+            const indexQuery = `
+                SELECT 
+                    i.name AS IndexName,
+                    i.type_desc AS IndexType,
+                    i.is_unique,
+                    c.name AS ColumnName
+                FROM sys.indexes i
+                JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
+                JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
+                WHERE i.object_id = OBJECT_ID('dbo.clients')
+                ORDER BY i.name, ic.key_ordinal
+            `;
+            const existingIndexes = await sqlPool.request().query(indexQuery);
+            logger.info(`[SQL] Existing indexes:`, existingIndexes.recordset);
+        } catch (indexError) {
+            logger.info(`[SQL] No existing indexes found:`, indexError.message);
+        }
+        
+        // Step 4: Execute the full schema SQL with detailed error handling
+        logger.info(`[SQL] Step 1.4: Executing full schema creation...`);
         const schemaSql = `
 SET NOCOUNT ON;
 DECLARE @actions TABLE(step NVARCHAR(100), detail NVARCHAR(4000), status NVARCHAR(50), rows INT NULL);
@@ -646,8 +709,11 @@ FROM sys.columns C
 JOIN sys.types TY ON TY.user_type_id = C.user_type_id
 WHERE C.object_id = OBJECT_ID('dbo.facts_meta') AND C.name = 'client_id';
 
+PRINT 'Current client_id type: ' + ISNULL(@clients_client_id_type, 'NULL (table does not exist)');
+
 IF OBJECT_ID('dbo.clients','U') IS NULL
 BEGIN
+  PRINT 'Creating new clients table...';
   CREATE TABLE dbo.clients(
     client_id UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID(),
     name NVARCHAR(255) NOT NULL,
@@ -657,71 +723,106 @@ BEGIN
   );
   INSERT INTO @actions VALUES('create-table','clients','ok',NULL);
   SET @clients_client_id_type = 'uniqueidentifier';
-END;
-
-IF COL_LENGTH('dbo.clients','client_id') IS NULL AND COL_LENGTH('dbo.clients','id') IS NOT NULL
-BEGIN
-  EXEC sp_rename 'dbo.clients.id', 'client_id', 'COLUMN';
-  INSERT INTO @actions VALUES('rename-column','clients.id -> clients.client_id','ok',NULL);
-  SET @clients_client_id_type = NULL;
-END;
-
-SELECT @clients_client_id_type = TY.name
-FROM sys.columns C
-JOIN sys.types TY ON TY.user_type_id = C.user_type_id
-WHERE C.object_id = OBJECT_ID('dbo.clients') AND C.name = 'client_id';
-
-IF @clients_client_id_type IS NOT NULL AND @clients_client_id_type <> 'uniqueidentifier'
-BEGIN
-  IF COL_LENGTH('dbo.clients','client_id_uid') IS NULL
-    ALTER TABLE dbo.clients ADD client_id_uid UNIQUEIDENTIFIER NULL;
-  UPDATE dbo.clients SET client_id_uid = ISNULL(client_id_uid, NEWID());
-  DECLARE @pk_clients sysname;
-  SELECT @pk_clients = kc.name
-  FROM sys.key_constraints kc
-  WHERE kc.parent_object_id = OBJECT_ID('dbo.clients') AND kc.type='PK';
-  IF @pk_clients IS NOT NULL
-  BEGIN
-    DECLARE @sql NVARCHAR(MAX) = N'ALTER TABLE dbo.clients DROP CONSTRAINT ['+@pk_clients+N']';
-    EXEC sp_executesql @sql;
-  END
-  ALTER TABLE dbo.clients ADD CONSTRAINT PK_clients PRIMARY KEY (client_id_uid);
-  EXEC sp_rename 'dbo.clients.client_id', 'client_id_int', 'COLUMN';
-  EXEC sp_rename 'dbo.clients.client_id_uid', 'client_id', 'COLUMN';
-  INSERT INTO @actions VALUES('migrate-type','clients.client_id int -> uniqueidentifier','ok',NULL);
-  IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='UQ_clients_name_norm' AND object_id=OBJECT_ID('dbo.clients'))
-    CREATE UNIQUE INDEX UQ_clients_name_norm ON dbo.clients(name_norm);
+  PRINT 'Clients table created successfully';
 END
 ELSE
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='UQ_clients_name_norm' AND object_id=OBJECT_ID('dbo.clients'))
-    CREATE UNIQUE INDEX UQ_clients_name_norm ON dbo.clients(name_norm);
+  PRINT 'Clients table already exists, checking structure...';
 END;
 
 -- Ensure name_norm column exists
 IF COL_LENGTH('dbo.clients', 'name_norm') IS NULL
 BEGIN
+    PRINT 'Adding name_norm column...';
     ALTER TABLE dbo.clients ADD name_norm NVARCHAR(255) NOT NULL DEFAULT '';
     INSERT INTO @actions VALUES('add-column','clients.name_norm','ok',NULL);
+    PRINT 'name_norm column added';
+END
+ELSE
+BEGIN
+    PRINT 'name_norm column already exists';
+END;
+
+-- Create unique index on name_norm if it doesn't exist
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='UQ_clients_name_norm' AND object_id=OBJECT_ID('dbo.clients'))
+BEGIN
+    PRINT 'Creating unique index on name_norm...';
+    CREATE UNIQUE INDEX UQ_clients_name_norm ON dbo.clients(name_norm);
+    INSERT INTO @actions VALUES('create-index','UQ_clients_name_norm','ok',NULL);
+    PRINT 'Unique index created';
+END
+ELSE
+BEGIN
+    PRINT 'Unique index on name_norm already exists';
 END;
 
 -- Create unassigned client if not exists
 IF NOT EXISTS (SELECT 1 FROM dbo.clients WHERE name_norm = N'unassigned')
 BEGIN
+    PRINT 'Creating unassigned client...';
     INSERT INTO dbo.clients (client_id, name, name_norm) VALUES (NEWID(), N'Unassigned', N'unassigned');
     INSERT INTO @actions VALUES('create-default-client','Unassigned','ok',1);
+    PRINT 'Unassigned client created';
+END
+ELSE
+BEGIN
+    PRINT 'Unassigned client already exists';
 END;
 
 SELECT step, detail, status, rows FROM @actions ORDER BY step;
 `;
         
         const result = await sqlPool.request().query(schemaSql);
-        logger.info(`[SQL] ✅ Tables ensured successfully:`, { created: [], altered: [] });
+        logger.info(`[SQL] ✅ Schema SQL executed successfully`);
+        logger.info(`[SQL] Schema creation results:`, result.recordset);
     } catch (tableError) {
         logger.error(`[SQL] ❌ Table initialization failed:`, tableError);
-        logger.error(`[SQL] Error details:`, tableError.message);
+        logger.error(`[SQL] Error message:`, tableError.message);
+        logger.error(`[SQL] Error code:`, tableError.code);
+        logger.error(`[SQL] Error number:`, tableError.number);
+        logger.error(`[SQL] Error state:`, tableError.state);
+        logger.error(`[SQL] Error class:`, tableError.class);
+        logger.error(`[SQL] Error severity:`, tableError.severity);
+        logger.error(`[SQL] Error server:`, tableError.serverName);
+        logger.error(`[SQL] Error procedure:`, tableError.procName);
+        logger.error(`[SQL] Error line:`, tableError.lineNumber);
+        logger.error(`[SQL] Full error object:`, JSON.stringify(tableError, null, 2));
         logger.error(`[SQL] Stack trace:`, tableError.stack);
-        return res.status(500).json({ success: false, error: `Table initialization failed: ${tableError.message}` });
+        
+        // Try to get more details from SQL Server
+        try {
+            if (sqlPool) {
+                const errorDetailQuery = `
+                    SELECT 
+                        error_number() as ErrorNumber,
+                        error_severity() as ErrorSeverity,
+                        error_state() as ErrorState,
+                        error_procedure() as ErrorProcedure,
+                        error_line() as ErrorLine,
+                        error_message() as ErrorMessage
+                `;
+                logger.error(`[SQL] Attempting to get SQL Server error details...`);
+                const errorDetails = await sqlPool.request().query(errorDetailQuery);
+                logger.error(`[SQL] SQL Server error details:`, errorDetails.recordset);
+            }
+        } catch (detailError) {
+            logger.error(`[SQL] Could not retrieve SQL error details:`, detailError.message);
+        }
+        
+        return res.status(500).json({ 
+            success: false, 
+            error: `Table initialization failed: ${tableError.message}`,
+            details: {
+                code: tableError.code,
+                number: tableError.number,
+                state: tableError.state,
+                class: tableError.class,
+                severity: tableError.severity,
+                server: tableError.serverName,
+                procedure: tableError.procName,
+                line: tableError.lineNumber
+            }
+        });
     }
     
     try {
