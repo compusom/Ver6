@@ -14,7 +14,9 @@
       "Bash(git rebase:*)",
       "Bash(git push:*)",
       "Bash(git pull:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(powershell:*)",
+      "Bash(rm:*)"
     ],
     "deny": [],
     "ask": []
