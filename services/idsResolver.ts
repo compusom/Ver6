@@ -11,7 +11,7 @@ export function synthAdId(
   adset: string = '',
   ad: string = ''
 ): bigint {
-  const input = `${accountName}|${campaign}|${adset}|${ad}`;
+  const input = `${accountName.toLowerCase()}|${campaign.toLowerCase()}|${adset.toLowerCase()}|${ad.toLowerCase()}`;
   // Use SHA-256 and keep the first 8 bytes (64 bits)
   const hex = createHash('sha256').update(input).digest('hex').slice(0, 16);
   const positive = BigInt('0x' + hex) & ((1n << 63n) - 1n); // 63-bit positive number

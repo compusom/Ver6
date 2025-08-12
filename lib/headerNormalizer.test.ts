@@ -17,6 +17,25 @@ describe('headerNormalizer', () => {
     expect(res).toEqual(['purchases', 'purchases_pct']);
   });
 
+  it('maps additional spanish headers to canonical names', () => {
+    const res = mapHeaders([
+      'Divisa',
+      'Visitas a la página de destino',
+      'Pagos iniciados',
+      'CTR porcentaje de clics en el enlace',
+      'CTR único porcentaje de clics en el enlace',
+      'Porcentaje de Compras',
+    ]);
+    expect(res).toEqual([
+      'currency_code',
+      'landing_page_views',
+      'initiate_checkout',
+      'ctr_link_pct',
+      'unique_ctr_link_pct',
+      'purchases_pct',
+    ]);
+  });
+
   it('dedupes after mapping', () => {
     const res = mapHeaders(['Compras', 'Compras']);
     expect(res).toEqual(['purchases', 'purchases_2']);

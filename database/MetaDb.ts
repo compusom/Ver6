@@ -38,7 +38,8 @@ export interface LookerUrlRow {
 
 export interface MetaDb {
   findClientByNameNorm(nameNorm: string): Promise<Client | undefined>;
-  createClient(client: { name: string; nameNorm: string }): Promise<string>;
+  createClient(client: { name: string; nameNorm: string; currencyCode?: string | undefined }): Promise<string>;
+  setClientCurrencyIfNull(clientId: string, currencyCode: string): Promise<void>;
   upsertAds(rows: MetaAdRow[]): Promise<{ inserted: number; updated: number }>;
   upsertMetaMetrics(rows: MetaMetricRow[]): Promise<{ inserted: number; updated: number }>;
   updateAdUrls(rows: LookerUrlRow[]): Promise<{ updated: number; unmatched: LookerUrlRow[] }>;
@@ -69,7 +70,7 @@ class MetaDbLocal implements MetaDb {
     return undefined;
   }
 
-  async createClient(client: { name: string; nameNorm: string }): Promise<string> {
+  async createClient(client: { name: string; nameNorm: string; currencyCode?: string }): Promise<string> {
     const existing = await this.findClientByNameNorm(client.nameNorm);
     if (existing) {
       existing.name = client.name;
@@ -77,7 +78,14 @@ class MetaDbLocal implements MetaDb {
       return existing.id;
     }
     const id = crypto.randomUUID();
-    const newClient: Client = { id, name: client.name, nameNorm: client.nameNorm, logo: '', currency: '', userId: '' };
+    const newClient: Client = {
+      id,
+      name: client.name,
+      nameNorm: client.nameNorm,
+      logo: '',
+      currency: client.currencyCode || '',
+      userId: '',
+    };
     this.clients.set(id, newClient);
     return id;
   }
@@ -178,6 +186,11 @@ class MetaDbLocal implements MetaDb {
   async saveFileHash(hash: string): Promise<void> {
     this.fileHashes.add(hash);
   }
+
+  async setClientCurrencyIfNull(clientId: string, currencyCode: string): Promise<void> {
+    const c = this.clients.get(clientId);
+    if (c && !c.currency) c.currency = currencyCode;
+  }
 }
 
 class MetaDbSql implements MetaDb {
@@ -202,26 +215,29 @@ class MetaDbSql implements MetaDb {
     const result = await pool
       .request()
       .input('name_norm', sql.NVarChar(255), nameNorm)
-      .query('SELECT TOP 1 client_id, name, name_norm FROM clients WHERE name_norm = @name_norm');
+      .query('SELECT TOP 1 client_id, name, name_norm, currency_code FROM clients WHERE name_norm = @name_norm');
     const row = result.recordset[0];
-    return row ? { id: String(row.client_id), name: row.name, nameNorm: row.name_norm, logo: '', currency: '', userId: '' } : undefined;
+    return row
+      ? { id: String(row.client_id), name: row.name, nameNorm: row.name_norm, logo: '', currency: row.currency_code || '', userId: '' }
+      : undefined;
   }
 
-  async createClient(client: { name: string; nameNorm: string }): Promise<string> {
+  async createClient(client: { name: string; nameNorm: string; currencyCode?: string }): Promise<string> {
     const pool = await this.ensurePool();
     const result = await pool
       .request()
       .input('name', sql.NVarChar(255), client.name)
       .input('name_norm', sql.NVarChar(255), client.nameNorm)
-      .query(`DECLARE @out TABLE(client_id UNIQUEIDENTIFIER, name NVARCHAR(255), name_norm NVARCHAR(255), created_at DATETIME2);
+      .input('currency', sql.NVarChar(10), client.currencyCode ?? null)
+      .query(`DECLARE @out TABLE(client_id UNIQUEIDENTIFIER, name NVARCHAR(255), name_norm NVARCHAR(255), currency_code NVARCHAR(10), created_at DATETIME2);
 MERGE dbo.clients AS T
-USING (SELECT @name_norm AS name_norm, @name AS name) AS S
+USING (SELECT @name_norm AS name_norm, @name AS name, @currency AS currency_code) AS S
 ON T.name_norm = S.name_norm
 WHEN MATCHED THEN UPDATE SET name = S.name
 WHEN NOT MATCHED THEN
-  INSERT (client_id, name, name_norm) VALUES (NEWID(), S.name, S.name_norm)
-OUTPUT inserted.client_id, inserted.name, inserted.name_norm, inserted.created_at INTO @out;
-SELECT client_id, name, name_norm, created_at FROM @out;`);
+  INSERT (client_id, name, name_norm, currency_code) VALUES (NEWID(), S.name, S.name_norm, S.currency_code)
+OUTPUT inserted.client_id, inserted.name, inserted.name_norm, inserted.currency_code, inserted.created_at INTO @out;
+SELECT client_id, name, name_norm, currency_code, created_at FROM @out;`);
     const row = result.recordset[0];
     return String(row.client_id);
   }
@@ -388,5 +404,14 @@ DELETE FROM dbo._staging_facts WHERE client_id=@ClientId;`);
   async saveFileHash(hash: string): Promise<void> {
     const pool = await this.ensurePool();
     await pool.request().input('h', sql.NVarChar(64), hash).query('INSERT INTO dbo.processed_files_hashes(file_hash) VALUES(@h)');
+  }
+
+  async setClientCurrencyIfNull(clientId: string, currencyCode: string): Promise<void> {
+    const pool = await this.ensurePool();
+    await pool
+      .request()
+      .input('id', sql.UniqueIdentifier, clientId)
+      .input('cur', sql.NVarChar(10), currencyCode)
+      .query('UPDATE clients SET currency_code=@cur WHERE client_id=@id AND currency_code IS NULL');
   }
 }

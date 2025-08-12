@@ -23,8 +23,12 @@ export const HEADER_MAP: Record<string, string> = {
   'valor de conversion de compras': 'value',
   'compras': 'purchases',
   '% compras': 'purchases_pct',
-  'visitas a la pagina de destino': 'lpv',
-  'pagos iniciados': 'init_checkout',
+  'porcentaje de compras': 'purchases_pct',
+  'visitas a la pagina de destino': 'landing_page_views',
+  'pagos iniciados': 'initiate_checkout',
+  'divisa': 'currency_code',
+  'ctr porcentaje de clics en el enlace': 'ctr_link_pct',
+  'ctr unico porcentaje de clics en el enlace': 'unique_ctr_link_pct',
 };
 export function mapHeaders(headers: string[]): string[] {
   const seen = new Map<string, number>();

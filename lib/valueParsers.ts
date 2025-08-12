@@ -14,8 +14,7 @@ export function toDateISO(val: any): string | null {
     if (year.length === 2) year = `20${year}`;
     return `${year}-${month}-${day}`;
   }
-  const dt = new Date(str);
-  return isNaN(dt.getTime()) ? null : dt.toISOString().slice(0, 10);
+  return null;
 }
 
 export function toNumberES(val: any): number | null {
