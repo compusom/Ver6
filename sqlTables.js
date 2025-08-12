@@ -2,7 +2,7 @@ export const TABLES = {
   clients: {
     create: `
         CREATE TABLE clients (
-            client_id INT IDENTITY(1,1) PRIMARY KEY,
+            client_id UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
             name VARCHAR(255) UNIQUE NOT NULL,
             token VARCHAR(255),
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -14,7 +14,7 @@ export const TABLES = {
     create: `
         CREATE TABLE ads (
             ad_id BIGINT PRIMARY KEY,
-            client_id INT NOT NULL,
+            client_id UNIQUEIDENTIFIER NOT NULL,
             ad_name VARCHAR(255),
             ad_preview_link TEXT,
             ad_creative_thumbnail_url TEXT,
@@ -27,7 +27,7 @@ export const TABLES = {
   facts_meta: {
     create: `
         CREATE TABLE facts_meta (
-            client_id INT NOT NULL,
+            client_id UNIQUEIDENTIFIER NOT NULL,
             ad_id BIGINT NOT NULL,
             campaign_id BIGINT,
             adset_id BIGINT,
@@ -48,7 +48,7 @@ export const TABLES = {
     create: `
         CREATE TABLE archivos_reporte (
             id_reporte INT IDENTITY(1,1) PRIMARY KEY,
-            client_id INT NOT NULL,
+            client_id UNIQUEIDENTIFIER NOT NULL,
             nombre_archivo VARCHAR(255),
             hash_archivo CHAR(64) UNIQUE NOT NULL,
             period_start DATE,
@@ -151,7 +151,7 @@ export const TABLES = {
     create: `
         CREATE TABLE archivos_url (
             id_url INT IDENTITY(1,1) PRIMARY KEY,
-            client_id INT NOT NULL,
+            client_id UNIQUEIDENTIFIER NOT NULL,
             nombre_archivo VARCHAR(255),
             hash_archivo CHAR(64) UNIQUE NOT NULL,
             uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -163,7 +163,7 @@ export const TABLES = {
   vistas_preview: {
     create: `
         CREATE TABLE vistas_preview (
-            client_id INT NOT NULL,
+            client_id UNIQUEIDENTIFIER NOT NULL,
             [Account name] VARCHAR(255),
             [Ad name] VARCHAR(255),
             [Reach] BIGINT,

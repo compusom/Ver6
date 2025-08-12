@@ -926,7 +926,7 @@ app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
 
         const report = await sqlPool
             .request()
-            .input('client_id', sql.Int, clientId)
+            .input('client_id', sql.UniqueIdentifier, clientId)
             .input('nombre_archivo', sql.VarChar(255), req.file.originalname)
             .input('hash_archivo', sql.Char(64), fileHash)
             .input('period_start', sql.Date, periodStart)
