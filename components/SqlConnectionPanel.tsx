@@ -42,7 +42,8 @@ export const SqlConnectionPanel: React.FC = () => {
     const [port, setPort] = useState(() => localStorage.getItem('sql_port') || '');
     const [database, setDatabase] = useState(() => localStorage.getItem('sql_database') || '');
     const [user, setUser] = useState(() => localStorage.getItem('sql_user') || '');
-    const [password, setPassword] = useState('');
+    const [password, setPassword] = useState(() => sessionStorage.getItem('sql_password') || '');
+    const [rememberPassword, setRememberPassword] = useState(() => Boolean(sessionStorage.getItem('sql_password')));
 
     const [connected, setConnected] = useState(false);
     const [permissions, setPermissions] = useState<Record<string, number> | null>(null);
@@ -130,12 +131,14 @@ export const SqlConnectionPanel: React.FC = () => {
                     password,
                 }),
             });
-            // Guardar credenciales (password en sessionStorage)
+            // Guardar credenciales (password en sessionStorage si está marcado)
             localStorage.setItem('sql_server', server);
             localStorage.setItem('sql_port', port);
             localStorage.setItem('sql_database', database);
             localStorage.setItem('sql_user', user);
-            sessionStorage.setItem('sql_password', password);
+            if (rememberPassword) {
+                sessionStorage.setItem('sql_password', password);
+            }
             if (data.success) {
                 setMessage('Conexión exitosa');
             } else {
@@ -261,6 +264,36 @@ export const SqlConnectionPanel: React.FC = () => {
         await runDiagnostics();
     };
 
+    const saveCredentials = () => {
+        localStorage.setItem('sql_server', server);
+        localStorage.setItem('sql_port', port);
+        localStorage.setItem('sql_database', database);
+        localStorage.setItem('sql_user', user);
+        if (rememberPassword) {
+            sessionStorage.setItem('sql_password', password);
+        } else {
+            sessionStorage.removeItem('sql_password');
+        }
+        setMessage('Credenciales guardadas correctamente');
+    };
+
+    const clearCredentials = () => {
+        if (window.confirm('¿Seguro que deseas borrar todas las credenciales guardadas?')) {
+            localStorage.removeItem('sql_server');
+            localStorage.removeItem('sql_port');
+            localStorage.removeItem('sql_database');
+            localStorage.removeItem('sql_user');
+            sessionStorage.removeItem('sql_password');
+            setServer('');
+            setPort('');
+            setDatabase('');
+            setUser('');
+            setPassword('');
+            setRememberPassword(false);
+            setMessage('Credenciales borradas');
+        }
+    };
+
     return (
         <div className="mb-8">
             {connectionAlert && (
@@ -268,7 +301,14 @@ export const SqlConnectionPanel: React.FC = () => {
                     ¡La conexión con SQL Server se perdió! Reconectando automáticamente...
                 </div>
             )}
-            <h3 className="text-xl font-bold text-brand-text mb-4">Conexión a SQL Server</h3>
+            <div className="flex items-center justify-between mb-4">
+                <h3 className="text-xl font-bold text-brand-text">Conexión a SQL Server</h3>
+                {(server || port || database || user || password) && (
+                    <div className="text-sm bg-blue-500/20 text-blue-400 px-3 py-1 rounded-full">
+                        Credenciales guardadas
+                    </div>
+                )}
+            </div>
             {/* Testigo de conexión al SQL Server */}
             <div className="mb-2 flex items-center gap-2">
                 <span className="font-semibold">Estado SQL Server:</span>
@@ -306,12 +346,23 @@ export const SqlConnectionPanel: React.FC = () => {
                         onChange={e => setPassword(e.target.value)}
                     />
                 </label>
+                <div className="flex items-center text-sm">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                            type="checkbox"
+                            checked={rememberPassword}
+                            onChange={e => setRememberPassword(e.target.checked)}
+                            className="rounded"
+                        />
+                        <span>Recordar contraseña</span>
+                    </label>
+                </div>
             </div>
-            <div className="flex items-center gap-4 mb-4">
+            <div className="flex flex-wrap items-center gap-2 mb-4">
                 <button
                     onClick={handleConnect}
                     disabled={loading}
-                    className="bg-brand-border hover:bg-brand-border/70 text-brand-text font-bold py-2 px-4 rounded-lg shadow-md transition-colors disabled:opacity-50"
+                    className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg shadow-md transition-colors disabled:opacity-50"
                 >
                     Conectar
                 </button>
@@ -321,6 +372,20 @@ export const SqlConnectionPanel: React.FC = () => {
                     className="bg-brand-border hover:bg-brand-border/70 text-brand-text font-bold py-2 px-4 rounded-lg shadow-md transition-colors disabled:opacity-50"
                 >
                     Probar Permisos
+                </button>
+                <button
+                    onClick={saveCredentials}
+                    disabled={loading}
+                    className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg shadow-md transition-colors disabled:opacity-50"
+                >
+                    Guardar Credenciales
+                </button>
+                <button
+                    onClick={clearCredentials}
+                    disabled={loading}
+                    className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg shadow-md transition-colors disabled:opacity-50"
+                >
+                    Borrar Guardadas
                 </button>
             </div>
             {/* Botón y listado de tablas SQL debajo del panel de conexión */}
