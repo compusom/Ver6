@@ -1270,121 +1270,6 @@ app.get('/api/sql/permissions', async (req, res) => {
     }
 });
 
-// --- Manage SQL Server tables ---
-// Shared helper to initialize required tables and columns if they are missing.
-async function ensureSqlTables() {
-    const created = [];
-    const altered = [];
-    logger.info(`[SQL] TABLE_CREATION_ORDER:`, TABLE_CREATION_ORDER);
-    logger.info(`[SQL] Available SQL_TABLE_DEFINITIONS:`, Object.keys(SQL_TABLE_DEFINITIONS));
-    
-    for (const table of TABLE_CREATION_ORDER) {
-        logger.info(`[SQL] Checking if table "${table}" exists...`);
-        const exists = await sqlPool
-            .request()
-            .query(`SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='${table}'`);
-        
-        if (exists.recordset.length === 0) {
-            logger.info(`[SQL] Table "${table}" does not exist, creating...`);
-            const createSQL = SQL_TABLE_DEFINITIONS[table];
-            logger.info(`[SQL] CREATE SQL for "${table}":`, createSQL);
-            
-            try {
-                await sqlPool.request().query(createSQL);
-                created.push(table);
-                logger.info(`[SQL] ✅ Table "${table}" created successfully`);
-            } catch (createError) {
-                logger.error(`[SQL] ❌ Failed to create table "${table}":`, createError);
-                throw createError;
-            }
-        } else {
-            logger.info(`[SQL] Table "${table}" already exists`);
-        }
-    }
-
-    const columnCheck = await sqlPool
-        .request()
-        .query("SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='archivos_reporte' AND COLUMN_NAME='days_detected'");
-    if (columnCheck.recordset.length === 0) {
-        await sqlPool.request().query('ALTER TABLE archivos_reporte ADD days_detected INT');
-        altered.push('archivos_reporte.days_detected');
-    }
-    return { created, altered };
-}
-
-// Exposed route handler that wraps ensureSqlTables and reports results.
-async function initSqlTables(req, res) {
-    if (!sqlPool) {
-        return res.status(400).json({ error: 'Not connected' });
-    }
-
-
-    const created = [];
-    const altered = [];
-    try {
-        for (const table of TABLE_CREATION_ORDER) {
-            // Check if table exists
-            const exists = await sqlPool
-                .request()
-                .query(`SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='${table}'`);
-            if (exists.recordset.length === 0) {
-                await sqlPool.request().query(SQL_TABLE_DEFINITIONS[table]);
-                created.push(table);
-            }
-        }
-
-        // Ensure required columns exist on existing tables
-        const columnCheck = await sqlPool
-            .request()
-            .query(`SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='archivos_reporte' AND COLUMN_NAME='days_detected'`);
-        if (columnCheck.recordset.length === 0) {
-            await sqlPool.request().query('ALTER TABLE archivos_reporte ADD days_detected INT');
-            altered.push('archivos_reporte.days_detected');
-        }
-
-        // Ensure demographic columns exist on metricas table
-        const edadCheck = await sqlPool
-            .request()
-            .query("SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='metricas' AND COLUMN_NAME='edad'");
-        if (edadCheck.recordset.length === 0) {
-            await sqlPool.request().query("ALTER TABLE metricas ADD [edad] VARCHAR(50)");
-            altered.push('metricas.edad');
-        }
-        const sexoCheck = await sqlPool
-            .request()
-            .query("SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='metricas' AND COLUMN_NAME='sexo'");
-        if (sexoCheck.recordset.length === 0) {
-            await sqlPool.request().query("ALTER TABLE metricas ADD [sexo] VARCHAR(50)");
-            altered.push('metricas.sexo');
-        }
-
-        // Remove deprecated columns if they exist
-        const obsoleteColumns = ['imagen_video_y_presentación', 'col_6'];
-        for (const col of obsoleteColumns) {
-            const chk = await sqlPool
-                .request()
-                .query(
-                    `SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='metricas' AND COLUMN_NAME='${col}'`
-                );
-            if (chk.recordset.length > 0) {
-                await sqlPool.request().query(`ALTER TABLE metricas DROP COLUMN [${col}]`);
-                altered.push(`metricas.drop_${col}`);
-            }
-        }
-
-
-
-        res.json({ success: true, created, altered });
-    } catch (error) {
-        logger.error('[SQL] Error creating tables:', error.message);
-        res.status(500).json({ success: false, error: error.message });
-    }
-}
-
-// Supports both POST (programmatic) and GET (manual browser check)
-app.post('/api/sql/init-tables', initSqlTables);
-app.get('/api/sql/init-tables', initSqlTables);
-
 // Drops all known tables (children first to respect FKs) and recreates them
 app.delete('/api/sql/tables', async (req, res) => {
     if (!sqlPool) {
@@ -1435,10 +1320,10 @@ app.delete('/api/sql/tables/data', async (req, res) => {
                 .query(`IF OBJECT_ID('${table}', 'U') IS NOT NULL DELETE FROM ${table};`);
         }
         
-        // Note: Removed automatic recreation of 'Unassigned' client
-        // Clients are created automatically from Excel imports
-        
-        res.json({ success: true, message: 'All data cleared and default client recreated' });
+        // Note: the previous automatic recreation of 'Unassigned' client has been removed.
+        // Clients will be created automatically from Excel imports when necessary.
+
+        res.json({ success: true, message: 'All data cleared' });
     } catch (error) {
         logger.error('[SQL] Error clearing table data:', error.message);
         res.status(500).json({ success: false, error: error.message });

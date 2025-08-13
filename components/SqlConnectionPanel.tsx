@@ -203,9 +203,9 @@ export const SqlConnectionPanel: React.FC = () => {
         setTableOpsLoading(true);
         setMessage('');
         try {
-            await fetchJson('/api/sql/tables', { method: 'DELETE' });
-            setMessage('Tablas eliminadas');
-            setTables([]);
+            const data = await fetchJson('/api/sql/tables', { method: 'DELETE' });
+            setMessage(data?.message || 'Tablas eliminadas');
+            await fetchTables();
         } catch (error) {
             const msg = error instanceof Error ? error.message : String(error);
             setMessage(msg === 'Failed to fetch' ? 'No se pudo conectar con el backend' : msg);
