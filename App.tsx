@@ -379,7 +379,10 @@ const App: React.FC = () => {
                 setBitacoraReports(loadedReports);
                 setUploadedVideos(loadedVideos);
                 setImportHistory(loadedHistory);
-                setPerformanceData(loadedPerfData);
+                const sanitizedPerfData = Object.fromEntries(
+                    Object.entries(loadedPerfData).filter(([_, v]) => Array.isArray(v))
+                );
+                setPerformanceData(sanitizedPerfData);
                 console.log('✅ [INIT] Additional data loaded');
                 
                 // Si no hay clientes, crear clientes de ejemplo
@@ -414,13 +417,14 @@ const App: React.FC = () => {
                 }
                 
                 // Debug logging para performance data
-                const perfRecordCount = Object.values(loadedPerfData).flat().length;
+                const perfRecordCount = Object.values(sanitizedPerfData).filter(Array.isArray).flat().length;
                 Logger.success(`Loaded ${loadedUsers.length} users, ${loadedClients.length} clients, ${perfRecordCount} performance records, and data for ${Object.keys(loadedLookerData).length} accounts.`);
-                
+
                 if (perfRecordCount > 0) {
-                    Logger.info(`Performance data loaded for clients: ${Object.keys(loadedPerfData).join(', ')}`);
-                    for (const [clientId, records] of Object.entries(loadedPerfData)) {
-                        Logger.info(`Client ${clientId}: ${records.length} performance records`);
+                    Logger.info(`Performance data loaded for clients: ${Object.keys(sanitizedPerfData).join(', ')}`);
+                    for (const [clientId, records] of Object.entries(sanitizedPerfData)) {
+                        const count = Array.isArray(records) ? records.length : 0;
+                        Logger.info(`Client ${clientId}: ${count} performance records`);
                     }
                 } else {
                     Logger.warn('No performance data loaded from database!');
