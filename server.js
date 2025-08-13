@@ -1842,37 +1842,45 @@ app.post('/api/performance/:clientId', (req, res) => {
     try {
         const { clientId } = req.params;
         const { records, batchId = `batch_${Date.now()}` } = req.body;
-        
+
+        if (!Array.isArray(records)) {
+            logger.warn(`[Server] Invalid performance records payload for client ${clientId}`);
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid records payload: expected an array of records'
+            });
+        }
+
         logger.info(`[Server] Saving ${records.length} performance records for client ${clientId}`);
-        
+
         const stmt = db.prepare(`
             INSERT INTO performance_records (client_id, record_data, batch_id)
             VALUES (?, ?, ?)
         `);
-        
+
         const transaction = db.transaction(() => {
             for (const record of records) {
                 stmt.run(clientId, JSON.stringify(record), batchId);
             }
         });
-        
+
         transaction();
-        
+
         logger.info(`[Server] ✅ Saved ${records.length} performance records for ${clientId}`);
-        
-        res.json({ 
-            success: true, 
+
+        res.json({
+            success: true,
             clientId,
             batchId,
             count: records.length,
             message: 'Performance records saved successfully'
         });
-        
+
     } catch (error) {
         logger.error('[Server] Error saving performance records:', error);
-        res.status(500).json({ 
-            success: false, 
-            error: error.message 
+        res.status(500).json({
+            success: false,
+            error: error.message
         });
     }
 });
