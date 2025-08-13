@@ -40,15 +40,23 @@ const normalizePerformance = (raw: any): Record<string, PerformanceRecord[]> => 
   const data = raw?.data ?? raw;
   if (Array.isArray(data)) {
     const rows = flattenRows(data);
-    if (rows.length > 0) {
-      result['default'] = rows;
-      total += rows.length;
+    const safeRows = Array.isArray(rows) ? rows : [];
+    if (!Array.isArray(rows)) {
+      Logger.warn('[FETCH] performanceData[default] rows missing or invalid');
+    }
+    if (safeRows.length > 0) {
+      result['default'] = safeRows;
+      total += safeRows.length;
     }
   } else if (data && typeof data === 'object') {
     for (const [key, value] of Object.entries(data)) {
       const rows = flattenRows(value);
-      result[key] = rows;
-      total += rows.length;
+      const safeRows = Array.isArray(rows) ? rows : [];
+      if (!Array.isArray(rows)) {
+        Logger.warn(`[FETCH] performanceData[${key}] rows missing or invalid`);
+      }
+      result[key] = safeRows;
+      total += safeRows.length;
     }
   }
   if (result.default && Object.keys(result).length > 1) {

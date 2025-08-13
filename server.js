@@ -295,6 +295,7 @@ const META_FIELD_MAPPING = new Map([
     ['pct_compras', 'pct_compras'],
     ['visualizaciones', 'visualizaciones'],
     ['cvr_link_click', 'cvr_link_click'],
+    ['nombre_de_la_imagen', 'nombre_de_la_imagen'],
     ['retencion_video', 'retencion_video_short'],
     ['retencion_de_video', 'retención_de_video'],
     ['impresiones_compras', 'impresiones_compras']
@@ -1102,8 +1103,9 @@ app.get('/api/sql/performance', async (req, res) => {
             `);
             
             const performanceData = {};
-            
-            result.recordset.forEach(row => {
+            const recordset = result.recordset || [];
+
+            recordset.forEach(row => {
                 if (!performanceData[row.client_id]) {
                     performanceData[row.client_id] = {
                         clientName: row.client_name,
@@ -1127,12 +1129,13 @@ app.get('/api/sql/performance', async (req, res) => {
                 }
             });
             
-            logger.info(`[Server] ✅ Retrieved SQL performance data for ${Object.keys(performanceData).length} clients`);
-            
-            res.json({ 
-                success: true, 
-                data: performanceData,
-                clientCount: Object.keys(performanceData).length,
+            const clientCount = Object.keys(performanceData).length;
+            logger.info(`[Server] ✅ Retrieved SQL performance data for ${clientCount} clients`);
+
+            res.json({
+                success: true,
+                data: clientCount ? performanceData : [],
+                clientCount,
                 source: 'SQL Server'
             });
             
@@ -1140,27 +1143,28 @@ app.get('/api/sql/performance', async (req, res) => {
             logger.info('[Server] Using SQLite for performance data');
             
             const stmt = db.prepare(`
-                SELECT client_id, record_data 
-                FROM performance_records 
+                SELECT client_id, record_data
+                FROM performance_records
                 ORDER BY created_at DESC
             `);
-            const rows = stmt.all();
-            
+            const rows = stmt.all() || [];
+
             const performanceData = {};
-            
+
             rows.forEach(row => {
                 if (!performanceData[row.client_id]) {
                     performanceData[row.client_id] = [];
                 }
                 performanceData[row.client_id].push(JSON.parse(row.record_data));
             });
-            
-            logger.info(`[Server] ✅ Retrieved SQLite performance data for ${Object.keys(performanceData).length} clients`);
-            
-            res.json({ 
-                success: true, 
-                data: performanceData,
-                clientCount: Object.keys(performanceData).length,
+
+            const clientCount = Object.keys(performanceData).length;
+            logger.info(`[Server] ✅ Retrieved SQLite performance data for ${clientCount} clients`);
+
+            res.json({
+                success: true,
+                data: clientCount ? performanceData : [],
+                clientCount,
                 totalRecords: rows.length,
                 source: 'SQLite'
             });
