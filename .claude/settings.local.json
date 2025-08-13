@@ -17,7 +17,12 @@
       "Bash(git add:*)",
       "Bash(powershell:*)",
       "Bash(rm:*)",
-      "Bash(npm uninstall:*)"
+      "Bash(npm uninstall:*)",
+      "Bash(curl:*)",
+      "Bash(pkill:*)",
+      "Bash(node:*)",
+      "Bash(del test-duplicates.js)",
+      "Bash(del:*)"
     ],
     "deny": [],
     "ask": []

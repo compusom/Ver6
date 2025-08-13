@@ -3,9 +3,13 @@ export const TABLES = {
     create: `
         CREATE TABLE clients (
             client_id INT IDENTITY(1,1) PRIMARY KEY,
-            name VARCHAR(255) UNIQUE NOT NULL,
+            name VARCHAR(255) NOT NULL,
+            name_norm VARCHAR(255),
             token VARCHAR(255),
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            currency VARCHAR(10) DEFAULT 'EUR',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT UQ_clients_name UNIQUE (name),
+            CONSTRAINT UQ_clients_name_norm UNIQUE (name_norm)
         )
     `,
     dependencies: []
@@ -16,11 +20,14 @@ export const TABLES = {
             ad_id BIGINT PRIMARY KEY,
             client_id INT NOT NULL,
             ad_name VARCHAR(255),
+            ad_name_norm VARCHAR(255),
             ad_preview_link TEXT,
             ad_creative_thumbnail_url TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (client_id) REFERENCES clients(client_id)
-        )
+            CONSTRAINT FK_ads_clients FOREIGN KEY (client_id) REFERENCES clients(client_id)
+        );
+        
+        CREATE INDEX IX_ads_client_adname ON ads (client_id, ad_name_norm);
     `,
     dependencies: ['clients']
   },
@@ -29,6 +36,7 @@ export const TABLES = {
         CREATE TABLE facts_meta (
             client_id INT NOT NULL,
             ad_id BIGINT NOT NULL,
+            [date] DATE NOT NULL,
             campaign_id BIGINT,
             adset_id BIGINT,
             impressions INT,
@@ -38,8 +46,9 @@ export const TABLES = {
             roas DECIMAL(10, 4),
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             ad_id_nz BIGINT,
-            FOREIGN KEY (client_id) REFERENCES clients(client_id),
-            FOREIGN KEY (ad_id) REFERENCES ads(ad_id)
+            CONSTRAINT FK_facts_meta_clients FOREIGN KEY (client_id) REFERENCES clients(client_id),
+            CONSTRAINT FK_facts_meta_ads FOREIGN KEY (ad_id) REFERENCES ads(ad_id),
+            CONSTRAINT UX_facts_meta_client_date_ad_nz UNIQUE (client_id, [date], ad_id_nz)
         )
     `,
     dependencies: ['clients', 'ads']
@@ -141,8 +150,8 @@ export const TABLES = {
             [impresiones_compras] INT,
             [captura_video_final] INT,
             inserted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE (unique_id, id_reporte),
-            FOREIGN KEY (id_reporte) REFERENCES archivos_reporte(id_reporte)
+            CONSTRAINT UX_metricas_unique_reporte UNIQUE (unique_id, id_reporte),
+            CONSTRAINT FK_metricas_archivos FOREIGN KEY (id_reporte) REFERENCES archivos_reporte(id_reporte) ON DELETE CASCADE
         )
     `,
     dependencies: ['archivos_reporte']

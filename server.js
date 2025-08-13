@@ -25,6 +25,7 @@ import crypto from 'crypto';
 import logger from './serverLogger.js';
 import { SQL_TABLE_DEFINITIONS, getCreationOrder, getDeletionOrder } from './sqlTables.js';
 import { parseDateForSort } from './lib/parseDateForSort.js';
+import SQLDebugLogger from './sql-debug-logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -50,65 +51,109 @@ const TABLE_DELETION_ORDER = getDeletionOrder();
  * @returns {Object} - Result object with actions and status
  */
 async function ensureCompleteSchema(sqlPool, logger) {
+    console.log('🔍 [SCHEMA DEBUG] ensureCompleteSchema function started');
     const actions = [];
     
     // Import the complete schema from sqlTables.js
+    console.log('🔍 [SCHEMA DEBUG] Importing sqlTables.js...');
     const { TABLES, getCreationOrder } = await import('./sqlTables.js');
     const tablesOrder = getCreationOrder();
+    console.log('🔍 [SCHEMA DEBUG] Tables order:', tablesOrder);
     
     logger.info(`[SQL][Schema] Tables to create in order:`, tablesOrder);
     
     // Create schema step by step
     for (const tableName of tablesOrder) {
+        console.log(`🔍 [SCHEMA DEBUG] Starting table: ${tableName}`);
         const tableConfig = TABLES[tableName];
         logger.info(`[SQL][Schema] Processing table: ${tableName}`);
         
         try {
             // Check if table exists
+            console.log(`🔍 [SCHEMA DEBUG] Checking if ${tableName} exists...`);
             const checkTableQuery = `
                 SELECT COUNT(*) as count 
                 FROM INFORMATION_SCHEMA.TABLES 
                 WHERE TABLE_NAME = '${tableName}' AND TABLE_SCHEMA = 'dbo'
             `;
             const tableExists = await sqlPool.request().query(checkTableQuery);
+            console.log(`🔍 [SCHEMA DEBUG] ${tableName} exists check result:`, tableExists.recordset[0].count);
             
             if (tableExists.recordset[0].count === 0) {
+                console.log(`🔍 [SCHEMA DEBUG] ${tableName} does not exist, creating...`);
                 logger.info(`[SQL][Schema] Creating table: ${tableName}`);
                 
-                // Use the exact SQL from sqlTables.js
-                let createSQL = tableConfig.create;
-                
-                await sqlPool.request().query(createSQL);
-                logger.info(`[SQL][Schema] ✅ Table ${tableName} created successfully`);
-                actions.push({ step: 'create-table', detail: tableName, status: 'ok', rows: null });
+                try {
+                    // Use the exact SQL from sqlTables.js
+                    let createSQL = tableConfig.create;
+                    console.log(`🔍 [SCHEMA DEBUG] About to execute SQL for ${tableName}:`);
+                    console.log(`🔍 [SCHEMA DEBUG] SQL:`, createSQL.substring(0, 200) + '...');
+                    
+                    await sqlPool.request().query(createSQL);
+                    console.log(`🔍 [SCHEMA DEBUG] ✅ ${tableName} created successfully`);
+                    logger.info(`[SQL][Schema] ✅ Table ${tableName} created successfully`);
+                    actions.push({ step: 'create-table', detail: tableName, status: 'ok', rows: null });
+                } catch (createError) {
+                    console.log(`❌ [SCHEMA DEBUG] CRITICAL ERROR creating table ${tableName}:`);
+                    console.log(`❌ [SCHEMA DEBUG] Error message:`, createError.message);
+                    console.log(`❌ [SCHEMA DEBUG] Error number:`, createError.number);
+                    console.log(`❌ [SCHEMA DEBUG] Error severity:`, createError.severity);
+                    console.log(`❌ [SCHEMA DEBUG] Error state:`, createError.state);
+                    console.log(`❌ [SCHEMA DEBUG] Error class:`, createError.class);
+                    console.log(`❌ [SCHEMA DEBUG] Error procedure:`, createError.procName);
+                    console.log(`❌ [SCHEMA DEBUG] Error line:`, createError.lineNumber);
+                    console.log(`❌ [SCHEMA DEBUG] SQL being executed:`, createSQL);
+                    console.log(`❌ [SCHEMA DEBUG] Full error object:`, JSON.stringify(createError, Object.getOwnPropertyNames(createError), 2));
+                    
+                    logger.error(`[SQL][Schema] ❌ Error creating table ${tableName}:`);
+                    logger.error(`[SQL][Schema] Error message:`, createError.message);
+                    logger.error(`[SQL][Schema] Error number:`, createError.number);
+                    logger.error(`[SQL][Schema] Error severity:`, createError.severity);
+                    logger.error(`[SQL][Schema] Error state:`, createError.state);
+                    logger.error(`[SQL][Schema] Error class:`, createError.class);
+                    logger.error(`[SQL][Schema] Error procedure:`, createError.procName);
+                    logger.error(`[SQL][Schema] Error line:`, createError.lineNumber);
+                    logger.error(`[SQL][Schema] SQL being executed:`, createSQL);
+                    
+                    // Check if it's a constraint/index error and if the table was partially created
+                    if (createError.message && (createError.message.includes('constraint') || createError.message.includes('index') || createError.number === 2714)) {
+                        logger.warn(`[SQL][Schema] Constraint/index error on ${tableName}, checking if table exists now...`);
+                        
+                        const reCheckTable = await sqlPool.request().query(checkTableQuery);
+                        if (reCheckTable.recordset[0].count > 0) {
+                            logger.info(`[SQL][Schema] Table ${tableName} exists after constraint error - continuing`);
+                            actions.push({ step: 'create-table', detail: tableName, status: 'exists-after-error', rows: null });
+                        } else {
+                            // Try to get more information about what went wrong
+                            logger.error(`[SQL][Schema] Table ${tableName} still doesn't exist after error. Attempting to continue with next table.`);
+                            actions.push({ step: 'create-table', detail: tableName, status: 'failed-but-continue', rows: null });
+                            continue; // Continue with next table instead of throwing
+                        }
+                    } else {
+                        // Log error but continue with next table
+                        logger.error(`[SQL][Schema] Non-constraint error on ${tableName}, continuing with next table`);
+                        actions.push({ step: 'create-table', detail: tableName, status: 'error-continue', rows: null });
+                        continue;
+                    }
+                }
             } else {
                 logger.info(`[SQL][Schema] Table ${tableName} already exists`);
                 actions.push({ step: 'check-table', detail: tableName, status: 'exists', rows: null });
-                
-                // For clients table, ensure we have the 'Unassigned' client
-                if (tableName === 'clients') {
-                    try {
-                        const unassignedCheck = await sqlPool.request().query(
-                            "SELECT COUNT(*) as count FROM clients WHERE name = 'Unassigned'"
-                        );
-                        
-                        if (unassignedCheck.recordset[0].count === 0) {
-                            await sqlPool.request().query(
-                                "INSERT INTO clients (name) VALUES ('Unassigned')"
-                            );
-                            logger.info(`[SQL][Schema] ✅ Created 'Unassigned' client`);
-                            actions.push({ step: 'create-default-client', detail: 'Unassigned', status: 'ok', rows: 1 });
-                        }
-                    } catch (clientError) {
-                        logger.warn(`[SQL][Schema] Warning creating Unassigned client:`, clientError.message);
-                        actions.push({ step: 'create-default-client', detail: 'Unassigned', status: 'error', rows: null });
-                    }
-                }
             }
+            
+            // Note: Removed automatic 'Unassigned' client creation
+            // Clients are now created automatically from Excel imports
             
         } catch (tableError) {
             logger.error(`[SQL][Schema] ❌ Error processing table ${tableName}:`, tableError.message);
-            actions.push({ step: 'create-table', detail: tableName, status: 'error', rows: null });
+            logger.error(`[SQL][Schema] Table error details:`, {
+                message: tableError.message,
+                number: tableError.number,
+                severity: tableError.severity,
+                state: tableError.state,
+                class: tableError.class
+            });
+            actions.push({ step: 'create-table', detail: tableName, status: 'error', rows: null, error: tableError.message });
             // Continue with other tables instead of stopping completely
             continue;
         }
@@ -131,10 +176,15 @@ async function ensureCompleteSchema(sqlPool, logger) {
         rows: finalTables.recordset.length 
     });
 
+    const hasErrors = actions.some(action => action.status === 'error');
+    const hasSuccessfulTables = finalTables.recordset.length > 0;
+    
     return {
-        success: true,
+        success: hasSuccessfulTables, // Success if at least some tables were created
         actions,
-        tablesCreated: finalTables.recordset.length
+        tablesCreated: finalTables.recordset.length,
+        hasErrors,
+        message: hasErrors ? `Schema setup completed with some errors. ${finalTables.recordset.length} tables available.` : 'Schema setup completed successfully.'
     };
 }
 
@@ -148,73 +198,133 @@ const normalizeKey = key =>
         .replace(/^_|_$/g, '')
         .toLowerCase();
 
-// Meta Excel to Database Field Mapping
+// Meta Excel to Database Field Mapping (COMPLETO)
 const META_FIELD_MAPPING = new Map([
     // Identificadores principales
     ['nombre_de_la_campana', 'nombre_de_la_campaña'],
-    ['nombre_del_conjunto_de_anuncios', 'nombre_del_anuncio'],
+    ['nombre_del_conjunto_de_anuncios', 'nombre_del_conjunto_de_anuncios'],
     ['nombre_del_anuncio', 'nombre_del_anuncio'],
     ['nombre_de_la_cuenta', 'nombre_de_la_cuenta'],
-    ['dia', 'finalizacion_de_campaña'],
+    ['dia', 'dia'],
     ['edad', 'edad'],
     ['sexo', 'sexo'],
     
-    // Métricas de rendimiento
+    // Métricas básicas de rendimiento
     ['importe_gastado_eur', 'importe_gastado_EUR'],
     ['impresiones', 'impresiones'],
     ['alcance', 'alcance'],
     ['frecuencia', 'frecuencia'],
-    ['cpm_costo_por_mil_impresiones', 'cpm_por_1000'],
-    ['clics_todos', 'clics_todos'],
-    ['clics_en_el_enlace', 'clics_enlace'],
-    ['visitas_a_la_pagina_de_destino', 'visitas_a_la_pagina_de_destino'],
-    ['ctr_todos', 'ctr_todos'],
-    ['ctr_porcentaje_de_clics_en_el_enlace', 'ctr_link_click_pct'],
-    ['cpc_todos', 'costo'],
-    
-    // Métricas de conversión
-    ['articulos_agregados_al_carrito', 'articulos_agregados_al_carrito'],
-    ['pagos_iniciados', 'pagos_iniciados'],
     ['compras', 'compras'],
-    ['valor_de_conversion_de_compras', 'valor_de_conversion_compras'],
+    ['visitas_a_la_pagina_de_destino', 'visitas_a_la_página_de_destino'],
+    ['clics_todos', 'clics_todos'],
+    ['cpm_costo_por_mil_impresiones', 'cpm_costo_por_mil_impresiones'],
+    ['ctr_todos', 'ctr_todos'],
+    ['cpc_todos', 'cpc_todos'],
     
-    // Métricas de video e interacción
-    ['reproducciones_de_video_de_3_segundos', 'reproducciones_de_video_3s'],
+    // Entrega
+    ['entrega_de_la_campana', 'entrega_de_la_campaña'],
+    ['entrega_del_conjunto_de_anuncios', 'entrega_del_conjunto_de_anuncios'],
+    ['entrega_del_anuncio', 'entrega_del_anuncio'],
+    
+    // Métricas de video
+    ['reproducciones_de_video_de_3_segundos', 'reproducciones_3s'],
     ['reproducciones_de_video_hasta_el_25', 'rep_video_25_pct'],
     ['reproducciones_de_video_hasta_el_50', 'rep_video_50_pct'],
     ['reproducciones_de_video_hasta_el_75', 'rep_video_75_pct'],
     ['reproducciones_de_video_hasta_el_95', 'rep_video_95_pct'],
     ['reproducciones_de_video_hasta_el_100', 'rep_video_100_pct'],
     ['tiempo_promedio_de_reproduccion_del_video', 'tiempo_promedio_video'],
-    ['interacciones_con_la_publicacion', 'interacciones_con_la_publicacion'],
-    ['reacciones_a_publicaciones', 'reacciones_a_la_publicacion'],
-    ['comentarios_de_publicaciones', 'comentarios_de_la_publicacion'],
+    ['reproducciones_de_video', 'rep_video'],
+    ['reproducciones_de_video_continuas_de_2_segundos_unicas', 'rep_video_2s_unicas'],
+    ['thruplays', 'thruplays'],
     
-    // Campos adicionales
+    // Conversiones y pagos
+    ['pagos_iniciados', 'pagos_iniciados'],
+    ['pagos_iniciados_en_el_sitio_web', 'pagos_iniciados_web'],
+    ['porcentaje_de_compras_por_visitas_a_la_pagina_de_destino', 'pct_compras_por_visitas_lp'],
+    ['articulos_agregados_al_carrito', 'artículos_agregados_al_carrito'],
+    ['informacion_de_pago_agregada', 'información_de_pago_agregada'],
+    ['valor_de_conversion_de_compras', 'valor_de_conversión_compras'],
+    
+    // Interacciones y engagement
+    ['me_gusta_en_facebook', 'me_gusta_en_facebook'],
+    ['interacciones_con_la_publicacion', 'interacciones_con_la_publicación'],
+    ['interaccion_con_la_pagina', 'interacción_con_la_página'],
+    ['comentarios_de_publicaciones', 'comentarios_de_publicaciones'],
+    ['reacciones_a_publicaciones', 'reacciones_a_publicaciones'],
+    ['veces_que_se_compartieron_las_publicaciones', 'veces_compartidas_publicaciones'],
+    
+    // Enlaces y CTR
+    ['clics_en_el_enlace', 'clics_en_el_enlace'],
+    ['ctr_porcentaje_de_clics_en_el_enlace', 'ctr_link_click_pct'],
+    ['ctr_unico_porcentaje_de_clics_en_el_enlace', 'ctr_unico_enlace_pct'],
+    
+    // Presupuesto y puja
+    ['presupuesto_de_la_campana', 'presupuesto_de_la_campaña'],
+    ['tipo_de_presupuesto_de_la_campana', 'tipo_de_presupuesto_de_la_campaña'],
+    ['puja', 'puja'],
+    ['tipo_de_puja', 'tipo_de_puja'],
+    
+    // Públicos
+    ['publicos_personalizados_incluidos', 'públicos_personalizados_incluidos'],
+    ['publicos_personalizados_excluidos', 'públicos_personalizados_excluidos'],
+    
+    // Configuración y objetivos
     ['objetivo', 'objetivo'],
-    ['tipo_de_compra', 'tipo_de_puja'],
+    ['tipo_de_compra', 'tipo_de_compra'],
     ['divisa', 'divisa'],
-    ['url_del_sitio_web', 'url_del_sitio_web']
+    ['url_del_sitio_web', 'url_del_sitio_web'],
+    
+    // Informes y fechas
+    ['inicio_del_informe', 'inicio_del_informe'],
+    ['fin_del_informe', 'fin_del_informe'],
+    
+    // Métricas AIDA y personalizadas
+    ['atencion', 'atencion'],
+    ['deseo', 'deseo'],
+    ['interes', 'interes'],
+    
+    // Métricas avanzadas de video y conversión
+    ['porcentaje_de_reproducciones_de_video_de_3_segundos_por_impresiones', 'pct_rep_3s_por_impresiones'],
+    ['aov', 'aov'],
+    ['lp_view_rate', 'lp_view_rate'],
+    ['adc_lpv', 'adc_lpv'],
+    ['captura_de_video', 'captura_de_video'],
+    ['captura_video', 'captura_video_final'],
+    ['tasa_de_conversion_de_landing', 'tasa_conv_landing'],
+    ['pct_compras', 'pct_compras'],
+    ['visualizaciones', 'visualizaciones'],
+    ['cvr_link_click', 'cvr_link_click'],
+    ['retencion_video', 'retencion_video_short'],
+    ['retencion_de_video', 'retención_de_video'],
+    ['impresiones_compras', 'impresiones_compras']
 ]);
 
 // Columns that contain numeric data
 const NUMERIC_COLUMNS = new Set([
-    'importe_gastado_EUR', 'impresiones', 'alcance', 'frecuencia', 'cpm_por_1000',
-    'clics_todos', 'clics_enlace', 'visitas_a_la_pagina_de_destino', 'ctr_todos',
-    'ctr_link_click_pct', 'costo', 'articulos_agregados_al_carrito', 'pagos_iniciados',
-    'compras', 'valor_de_conversion_compras', 'reproducciones_de_video_3s',
+    'importe_gastado_EUR', 'impresiones', 'alcance', 'frecuencia', 'compras',
+    'clics_todos', 'clics_en_el_enlace', 'visitas_a_la_página_de_destino', 'ctr_todos',
+    'ctr_link_click_pct', 'cpc_todos', 'cpm_costo_por_mil_impresiones',
+    'artículos_agregados_al_carrito', 'pagos_iniciados', 'pagos_iniciados_web',
+    'valor_de_conversión_compras', 'reproducciones_3s', 'me_gusta_en_facebook',
     'rep_video_25_pct', 'rep_video_50_pct', 'rep_video_75_pct', 'rep_video_95_pct',
-    'rep_video_100_pct', 'tiempo_promedio_video', 'interacciones_con_la_publicacion',
-    'reacciones_a_la_publicacion', 'comentarios_de_la_publicacion'
+    'rep_video_100_pct', 'tiempo_promedio_video', 'interacciones_con_la_publicación',
+    'reacciones_a_publicaciones', 'comentarios_de_publicaciones', 'veces_compartidas_publicaciones',
+    'puja', 'presupuesto_de_la_campaña', 'información_de_pago_agregada', 'interacción_con_la_página',
+    'pct_compras_por_visitas_lp', 'atencion', 'deseo', 'interes', 'pct_rep_3s_por_impresiones',
+    'aov', 'lp_view_rate', 'adc_lpv', 'captura_de_video', 'tasa_conv_landing', 'pct_compras',
+    'visualizaciones', 'cvr_link_click', 'retencion_video_short', 'retención_de_video',
+    'thruplays', 'rep_video', 'rep_video_2s_unicas', 'ctr_unico_enlace_pct',
+    'impresiones_compras', 'captura_video_final'
 ]);
 
 // Columns that contain date data
 const DATE_COLUMNS = new Set([
-    'finalizacion_de_campaña', 'fecha_de_creacion', 'inicio_del_informe', 'fin_del_informe'
+    'dia', 'fecha_de_creacion', 'inicio_del_informe', 'fin_del_informe'
 ]);
 
-// All available metric columns
-const METRIC_COLUMNS = Array.from(META_FIELD_MAPPING.values());
+// All available metric columns (eliminar duplicados)
+const METRIC_COLUMNS = [...new Set(Array.from(META_FIELD_MAPPING.values()))];
 
 // Mapear tipos de columnas SQL Server a tipos de mssql para parámetros preparados
 function toMssqlType(sqlTypeStr) {
@@ -240,53 +350,110 @@ function toMssqlType(sqlTypeStr) {
     return sql.VarChar(sql.MAX);
 }
 
-// Default MSSQL types for Meta fields
+// Default MSSQL types for Meta fields (ACTUALIZADO)
 const MSSQL_TYPE_MAP = new Map([
     // Default fallback for any unknown column
     ['default', sql.VarChar(sql.MAX)],
     
-    // Numeric fields
-    ['importe_gastado_EUR', sql.Decimal(18, 2)],
-    ['impresiones', sql.Int],
-    ['alcance', sql.Int],
-    ['frecuencia', sql.Decimal(10, 4)],
-    ['cpm_por_1000', sql.Decimal(10, 2)],
-    ['clics_todos', sql.Int],
-    ['clics_enlace', sql.Int],
-    ['visitas_a_la_pagina_de_destino', sql.Int],
-    ['ctr_todos', sql.Decimal(10, 4)],
-    ['ctr_link_click_pct', sql.Decimal(10, 4)],
-    ['costo', sql.Decimal(10, 2)],
-    ['articulos_agregados_al_carrito', sql.Int],
-    ['pagos_iniciados', sql.Int],
-    ['compras', sql.Int],
-    ['valor_de_conversion_compras', sql.Decimal(10, 2)],
-    ['reproducciones_de_video_3s', sql.Int],
-    ['rep_video_25_pct', sql.Decimal(10, 4)],
-    ['rep_video_50_pct', sql.Decimal(10, 4)],
-    ['rep_video_75_pct', sql.Decimal(10, 4)],
-    ['rep_video_95_pct', sql.Decimal(10, 4)],
-    ['rep_video_100_pct', sql.Decimal(10, 4)],
-    ['tiempo_promedio_video', sql.Int],
-    ['interacciones_con_la_publicacion', sql.Int],
-    ['reacciones_a_la_publicacion', sql.Int],
-    ['comentarios_de_la_publicacion', sql.Int],
+    // Identificadores
+    ['unique_id', sql.VarChar(255)],
+    ['id_reporte', sql.Int],
+    
+    // Text fields - Identificadores principales
+    ['nombre_de_la_campaña', sql.VarChar(255)],
+    ['nombre_del_conjunto_de_anuncios', sql.VarChar(255)],
+    ['nombre_del_anuncio', sql.VarChar(255)],
+    ['nombre_de_la_cuenta', sql.VarChar(255)],
+    ['edad', sql.VarChar(50)],
+    ['sexo', sql.VarChar(50)],
+    
+    // Text fields - Entrega
+    ['entrega_de_la_campaña', sql.VarChar(50)],
+    ['entrega_del_conjunto_de_anuncios', sql.VarChar(50)],
+    ['entrega_del_anuncio', sql.VarChar(50)],
+    
+    // Text fields - Configuración
+    ['objetivo', sql.VarChar(100)],
+    ['tipo_de_compra', sql.VarChar(50)],
+    ['tipo_de_puja', sql.VarChar(50)],
+    ['tipo_de_presupuesto_de_la_campaña', sql.VarChar(50)],
+    ['divisa', sql.VarChar(10)],
+    ['url_del_sitio_web', sql.VarChar(sql.MAX)],
+    ['públicos_personalizados_incluidos', sql.VarChar(sql.MAX)],
+    ['públicos_personalizados_excluidos', sql.VarChar(sql.MAX)],
+    ['nombre_de_la_imagen', sql.VarChar(255)],
     
     // Date fields
-    ['finalizacion_de_campaña', sql.Date],
-    ['fecha_de_creacion', sql.Date],
+    ['dia', sql.Date],
     ['inicio_del_informe', sql.Date],
     ['fin_del_informe', sql.Date],
     
-    // Text fields
-    ['nombre_de_la_campaña', sql.VarChar(255)],
-    ['nombre_del_anuncio', sql.VarChar(255)],
-    ['edad', sql.VarChar(50)],
-    ['sexo', sql.VarChar(50)],
-    ['objetivo', sql.VarChar(255)],
-    ['tipo_de_puja', sql.VarChar(255)],
-    ['unique_id', sql.VarChar(255)],
-    ['id_reporte', sql.Int]
+    // Numeric fields - Métricas básicas
+    ['importe_gastado_EUR', sql.Decimal(12, 2)],
+    ['impresiones', sql.BigInt],
+    ['alcance', sql.BigInt],
+    ['frecuencia', sql.Decimal(5, 2)],
+    ['compras', sql.Int],
+    ['visitas_a_la_página_de_destino', sql.Int],
+    ['clics_todos', sql.Int],
+    ['clics_en_el_enlace', sql.Int],
+    ['cpm_costo_por_mil_impresiones', sql.Decimal(12, 2)],
+    ['ctr_todos', sql.Decimal(5, 2)],
+    ['cpc_todos', sql.Decimal(12, 2)],
+    ['ctr_link_click_pct', sql.Decimal(5, 2)],
+    ['ctr_unico_enlace_pct', sql.Decimal(5, 2)],
+    
+    // Numeric fields - Video
+    ['reproducciones_3s', sql.BigInt],
+    ['rep_video_25_pct', sql.BigInt],
+    ['rep_video_50_pct', sql.BigInt],
+    ['rep_video_75_pct', sql.BigInt],
+    ['rep_video_95_pct', sql.BigInt],
+    ['rep_video_100_pct', sql.BigInt],
+    ['tiempo_promedio_video', sql.Decimal(6, 2)],
+    ['rep_video', sql.Int],
+    ['rep_video_2s_unicas', sql.Int],
+    ['thruplays', sql.Int],
+    
+    // Numeric fields - Conversiones
+    ['pagos_iniciados', sql.Int],
+    ['pagos_iniciados_web', sql.Int],
+    ['artículos_agregados_al_carrito', sql.Int],
+    ['información_de_pago_agregada', sql.Int],
+    ['valor_de_conversión_compras', sql.Decimal(12, 2)],
+    ['pct_compras_por_visitas_lp', sql.Decimal(5, 2)],
+    
+    // Numeric fields - Interacciones
+    ['me_gusta_en_facebook', sql.Int],
+    ['interacciones_con_la_publicación', sql.Int],
+    ['interacción_con_la_página', sql.Int],
+    ['comentarios_de_publicaciones', sql.Int],
+    ['reacciones_a_publicaciones', sql.Int],
+    ['veces_compartidas_publicaciones', sql.Int],
+    
+    // Numeric fields - Presupuesto
+    ['puja', sql.Decimal(12, 2)],
+    ['presupuesto_de_la_campaña', sql.Decimal(12, 2)],
+    
+    // Numeric fields - AIDA y personalizadas
+    ['atencion', sql.Int],
+    ['deseo', sql.Int],
+    ['interes', sql.Int],
+    
+    // Numeric fields - Métricas avanzadas
+    ['pct_rep_3s_por_impresiones', sql.Decimal(5, 2)],
+    ['aov', sql.Decimal(12, 2)],
+    ['lp_view_rate', sql.Decimal(5, 2)],
+    ['adc_lpv', sql.Decimal(12, 2)],
+    ['captura_de_video', sql.Int],
+    ['captura_video_final', sql.Int],
+    ['tasa_conv_landing', sql.Decimal(5, 2)],
+    ['pct_compras', sql.Decimal(5, 2)],
+    ['visualizaciones', sql.Int],
+    ['cvr_link_click', sql.Decimal(5, 2)],
+    ['retencion_video_short', sql.Decimal(5, 2)],
+    ['retención_de_video', sql.Decimal(5, 2)],
+    ['impresiones_compras', sql.Int]
 ]);
 
 // Utility numeric parser mirroring the client-side logic
@@ -393,13 +560,361 @@ initializeDatabase();
 
 // ==================== API ROUTES ====================
 
+// Debug endpoint to test SQL connection step by step with comprehensive logging
+app.post('/api/sql/debug-connect', async (req, res) => {
+    const { server, port, database, user, password } = req.body || {};
+    
+    // Create comprehensive logger
+    const debugLogger = new SQLDebugLogger();
+    
+    debugLogger.info('SESSION', 'Starting comprehensive SQL debug session');
+    debugLogger.debug('REQUEST', 'Received connection request', {
+        server: server || 'undefined',
+        port: port || 'undefined', 
+        database: database || 'undefined',
+        user: user || 'undefined',
+        passwordProvided: !!password,
+        requestBody: req.body
+    });
+    
+    try {
+        debugLogger.info('VALIDATION', 'Starting parameter validation');
+        
+        const portIsValid = typeof port === 'string' && /^\d+$/.test(port);
+        const portNumber = portIsValid ? parseInt(port, 10) : NaN;
+        
+        debugLogger.debug('VALIDATION', 'Parameter validation details', {
+            serverType: typeof server,
+            serverValid: typeof server === 'string' && !!server.trim(),
+            portType: typeof port,
+            portIsValid,
+            portNumber,
+            portInRange: !isNaN(portNumber) && portNumber >= 1 && portNumber <= 65535,
+            databaseType: typeof database,
+            databaseValid: typeof database === 'string' && !!database.trim(),
+            userType: typeof user,
+            userValid: typeof user === 'string' && !!user.trim(),
+            passwordType: typeof password,
+            passwordValid: typeof password === 'string' && !!password.trim()
+        });
+        
+        if (
+            typeof server !== 'string' || !server.trim() ||
+            !portIsValid || portNumber < 1 || portNumber > 65535 ||
+            typeof database !== 'string' || !database.trim() ||
+            typeof user !== 'string' || !user.trim() ||
+            typeof password !== 'string' || !password.trim()
+        ) {
+            debugLogger.error('VALIDATION', 'Invalid SQL connection parameters provided');
+            const reportFile = debugLogger.saveFullReport();
+            return res.status(400).json({ 
+                success: false, 
+                error: 'Invalid parameters', 
+                logFile: reportFile,
+                summary: debugLogger.getLogSummary()
+            });
+        }
+        
+        debugLogger.success('VALIDATION', 'All parameters validated successfully');
+        
+        const config = {
+            server,
+            port: portNumber,
+            database,
+            user,
+            password,
+            options: {
+                encrypt: false,
+                trustServerCertificate: true,
+                enableArithAbort: true
+            }
+        };
+        
+        debugLogger.debug('CONFIG', 'SQL Server connection configuration created', config);
+        
+        debugLogger.info('CONNECTION', 'Attempting to connect to SQL Server');
+        
+        if (sqlPool) {
+            debugLogger.info('CLEANUP', 'Closing existing connection pool');
+            try {
+                await sqlPool.close();
+                debugLogger.success('CLEANUP', 'Existing connection pool closed successfully');
+            } catch (closeError) {
+                debugLogger.warn('CLEANUP', 'Error closing existing connection pool', closeError);
+            }
+        }
+        
+        debugLogger.info('CONNECTION', 'Creating new SQL connection pool');
+        sqlPool = await new sql.ConnectionPool(config).connect();
+        debugLogger.success('CONNECTION', 'Connected to SQL Server successfully');
+        
+        debugLogger.info('TEST', 'Testing connection with simple query');
+        const testResult = await sqlPool.request().query('SELECT 1 as test, GETDATE() as currentTime, @@VERSION as version');
+        debugLogger.success('TEST', 'Test query executed successfully', { 
+            result: testResult.recordset,
+            rowCount: testResult.rowsAffected 
+        });
+        
+        debugLogger.info('SCHEMA', 'Starting comprehensive schema verification');
+        
+        // Check existing tables with detailed info
+        debugLogger.info('SCHEMA', 'Checking existing database tables');
+        const existingTablesQuery = `
+            SELECT 
+                t.TABLE_NAME,
+                t.TABLE_TYPE,
+                t.TABLE_SCHEMA
+            FROM INFORMATION_SCHEMA.TABLES t 
+            WHERE t.TABLE_SCHEMA = 'dbo' 
+            ORDER BY t.TABLE_NAME
+        `;
+        const existingTables = await sqlPool.request().query(existingTablesQuery);
+        debugLogger.info('SCHEMA', 'Found existing tables', { 
+            count: existingTables.recordset.length,
+            tables: existingTables.recordset
+        });
+        
+        // Check constraints and indexes
+        debugLogger.info('SCHEMA', 'Checking existing constraints and indexes');
+        const constraintsQuery = `
+            SELECT 
+                tc.CONSTRAINT_NAME,
+                tc.CONSTRAINT_TYPE,
+                tc.TABLE_NAME,
+                kcu.COLUMN_NAME
+            FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+            LEFT JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu 
+                ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+            WHERE tc.TABLE_SCHEMA = 'dbo'
+            ORDER BY tc.TABLE_NAME, tc.CONSTRAINT_NAME
+        `;
+        const constraints = await sqlPool.request().query(constraintsQuery);
+        debugLogger.info('SCHEMA', 'Found existing constraints', { 
+            count: constraints.recordset.length,
+            constraints: constraints.recordset
+        });
+        
+        // Load table definitions
+        debugLogger.info('SCHEMA', 'Loading table definitions from sqlTables.js');
+        const { TABLES, getCreationOrder } = await import('./sqlTables.js');
+        const tablesOrder = getCreationOrder();
+        debugLogger.info('SCHEMA', 'Table creation order determined', { 
+            totalTables: Object.keys(TABLES).length,
+            creationOrder: tablesOrder,
+            tableDefinitions: Object.keys(TABLES)
+        });
+        
+        debugLogger.info('SCHEMA', 'Beginning table-by-table processing');
+        
+        let successfulTables = 0;
+        let failedTables = 0;
+        let skippedTables = 0;
+        
+        for (const tableName of tablesOrder) {
+            debugLogger.info(`TABLE-${tableName.toUpperCase()}`, `Starting processing of table: ${tableName}`);
+            
+            try {
+                const tableConfig = TABLES[tableName];
+                debugLogger.debug(`TABLE-${tableName.toUpperCase()}`, 'Table configuration loaded', {
+                    hasCreateSQL: !!tableConfig.create,
+                    dependencies: tableConfig.dependencies || [],
+                    createSQLLength: tableConfig.create ? tableConfig.create.length : 0
+                });
+                
+                // Check if table exists
+                const checkTableQuery = `SELECT COUNT(*) as count FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '${tableName}' AND TABLE_SCHEMA = 'dbo'`;
+                debugLogger.debug(`TABLE-${tableName.toUpperCase()}`, 'Checking table existence', { query: checkTableQuery });
+                
+                const tableExists = await sqlPool.request().query(checkTableQuery);
+                const exists = tableExists.recordset[0].count > 0;
+                debugLogger.info(`TABLE-${tableName.toUpperCase()}`, `Table existence check complete`, { 
+                    exists,
+                    count: tableExists.recordset[0].count 
+                });
+                
+                if (!exists) {
+                    debugLogger.info(`TABLE-${tableName.toUpperCase()}`, `Table does not exist, attempting creation`);
+                    debugLogger.sql(`TABLE-${tableName.toUpperCase()}`, 'Executing CREATE TABLE statement', tableConfig.create);
+                    
+                    try {
+                        await sqlPool.request().query(tableConfig.create);
+                        debugLogger.success(`TABLE-${tableName.toUpperCase()}`, `Table created successfully`);
+                        successfulTables++;
+                    } catch (createError) {
+                        debugLogger.logError(`TABLE-${tableName.toUpperCase()}`, `CRITICAL ERROR creating table`, createError);
+                        
+                        // Try to get more SQL Server error details
+                        try {
+                            const errorDetailsQuery = `
+                                SELECT 
+                                    ERROR_NUMBER() as ErrorNumber,
+                                    ERROR_SEVERITY() as ErrorSeverity,
+                                    ERROR_STATE() as ErrorState,
+                                    ERROR_PROCEDURE() as ErrorProcedure,
+                                    ERROR_LINE() as ErrorLine,
+                                    ERROR_MESSAGE() as ErrorMessage
+                            `;
+                            const errorDetails = await sqlPool.request().query(errorDetailsQuery);
+                            debugLogger.error(`TABLE-${tableName.toUpperCase()}`, 'SQL Server error details', errorDetails.recordset[0]);
+                        } catch (detailError) {
+                            debugLogger.warn(`TABLE-${tableName.toUpperCase()}`, 'Could not retrieve SQL error details', detailError);
+                        }
+                        
+                        failedTables++;
+                        continue; // Continue with next table
+                    }
+                } else {
+                    debugLogger.info(`TABLE-${tableName.toUpperCase()}`, `Table already exists, skipping creation`);
+                    skippedTables++;
+                }
+                
+                // Special handling for clients table
+                if (tableName === 'clients') {
+                    debugLogger.info('DEFAULT-CLIENT', 'Processing default client for clients table');
+                    try {
+                        const unassignedCheck = await sqlPool.request().query("SELECT COUNT(*) as count FROM clients WHERE name = 'Unassigned'");
+                        debugLogger.debug('DEFAULT-CLIENT', 'Default client existence check', { count: unassignedCheck.recordset[0].count });
+                        
+                        if (unassignedCheck.recordset[0].count === 0) {
+                            debugLogger.info('DEFAULT-CLIENT', 'Creating default Unassigned client');
+                            await sqlPool.request().query("INSERT INTO clients (name) VALUES ('Unassigned')");
+                            debugLogger.success('DEFAULT-CLIENT', 'Default client created successfully');
+                        } else {
+                            debugLogger.info('DEFAULT-CLIENT', 'Default client already exists');
+                        }
+                    } catch (clientError) {
+                        debugLogger.logError('DEFAULT-CLIENT', 'Error handling default client', clientError);
+                    }
+                }
+                
+            } catch (tableError) {
+                debugLogger.logError(`TABLE-${tableName.toUpperCase()}`, `Unexpected error processing table`, tableError);
+                failedTables++;
+                continue;
+            }
+        }
+        
+        debugLogger.info('SUMMARY', 'Table processing completed', {
+            totalTables: tablesOrder.length,
+            successful: successfulTables,
+            failed: failedTables,
+            skipped: skippedTables
+        });
+        
+        // Final verification
+        debugLogger.info('FINAL-CHECK', 'Performing final database verification');
+        const finalTables = await sqlPool.request().query(existingTablesQuery);
+        const finalConstraints = await sqlPool.request().query(constraintsQuery);
+        
+        debugLogger.success('FINAL-CHECK', 'Final verification completed', { 
+            tablesNow: finalTables.recordset.length,
+            tableNames: finalTables.recordset.map(t => t.TABLE_NAME),
+            constraintsNow: finalConstraints.recordset.length
+        });
+        
+        // Save comprehensive report
+        const reportFile = debugLogger.saveFullReport();
+        const summary = debugLogger.getLogSummary();
+        
+        debugLogger.success('SESSION', 'Debug session completed successfully');
+        
+        res.json({ 
+            success: true, 
+            tablesCreated: finalTables.recordset.length,
+            summary,
+            logFile: reportFile,
+            statistics: {
+                totalTables: tablesOrder.length,
+                successful: successfulTables,
+                failed: failedTables,
+                skipped: skippedTables
+            }
+        });
+        
+    } catch (error) {
+        debugLogger.logError('CONNECTION', 'FATAL ERROR during SQL connection process', error);
+        
+        // Try to get additional error context
+        if (error.originalError) {
+            debugLogger.error('CONNECTION', 'Original error details', error.originalError);
+        }
+        
+        if (sqlPool) {
+            debugLogger.info('CLEANUP', 'Closing connection pool due to error');
+            try {
+                await sqlPool.close();
+                debugLogger.success('CLEANUP', 'Connection pool closed successfully');
+            } catch (closeError) {
+                debugLogger.error('CLEANUP', 'Error closing connection pool', closeError);
+            }
+            sqlPool = null;
+        }
+        
+        const reportFile = debugLogger.saveFullReport();
+        const summary = debugLogger.getLogSummary();
+        
+        res.status(500).json({ 
+            success: false, 
+            error: error.message, 
+            logFile: reportFile,
+            summary
+        });
+    }
+});
+
 // --- SQL Server connection management ---
 app.post('/api/sql/connect', async (req, res) => {
     const { server, port, database, user, password } = req.body || {};
 
+    // Log connection attempt
+    console.log('🔍 [SQL DEBUG] Connection attempt started');
+    console.log('🔍 [SQL DEBUG] Parameters:', { server, port, database, user, passwordProvided: !!password });
+    
+    // Create comprehensive logger for this connection attempt
+    let debugLogger;
+    try {
+        debugLogger = new SQLDebugLogger();
+        debugLogger.info('CONNECTION', 'Starting SQL Server connection attempt', {
+            server: server || 'undefined',
+            port: port || 'undefined', 
+            database: database || 'undefined',
+            user: user || 'undefined',
+            passwordProvided: !!password
+        });
+        console.log('🔍 [SQL DEBUG] Logger created successfully');
+    } catch (loggerError) {
+        console.error('❌ [SQL DEBUG] Failed to create logger:', loggerError);
+        // Continue without logger
+        debugLogger = {
+            info: (cat, msg, data) => console.log(`ℹ️ [${cat}] ${msg}`, data),
+            debug: (cat, msg, data) => console.log(`🔍 [${cat}] ${msg}`, data),
+            error: (cat, msg, data) => console.log(`❌ [${cat}] ${msg}`, data),
+            warn: (cat, msg, data) => console.log(`⚠️ [${cat}] ${msg}`, data),
+            success: (cat, msg, data) => console.log(`✅ [${cat}] ${msg}`, data),
+            logError: (cat, msg, error) => console.log(`❌ [${cat}] ${msg}`, error),
+            saveFullReport: () => null
+        };
+    }
+
     // Validación básica de parámetros
     const portIsValid = typeof port === 'string' && /^\d+$/.test(port);
     const portNumber = portIsValid ? parseInt(port, 10) : NaN;
+    
+    debugLogger.debug('VALIDATION', 'Parameter validation details', {
+        serverType: typeof server,
+        serverValid: typeof server === 'string' && !!server.trim(),
+        portType: typeof port,
+        portIsValid,
+        portNumber,
+        portInRange: !isNaN(portNumber) && portNumber >= 1 && portNumber <= 65535,
+        databaseType: typeof database,
+        databaseValid: typeof database === 'string' && !!database.trim(),
+        userType: typeof user,
+        userValid: typeof user === 'string' && !!user.trim(),
+        passwordType: typeof password,
+        passwordValid: typeof password === 'string' && !!password.trim()
+    });
+    
     if (
         typeof server !== 'string' || !server.trim() ||
         !portIsValid || portNumber < 1 || portNumber > 65535 ||
@@ -407,7 +922,9 @@ app.post('/api/sql/connect', async (req, res) => {
         typeof user !== 'string' || !user.trim() ||
         typeof password !== 'string' || !password.trim()
     ) {
-        return res.status(400).json({ success: false, error: 'Invalid SQL connection parameters' });
+        debugLogger.error('VALIDATION', 'Invalid SQL connection parameters provided');
+        const reportFile = debugLogger.saveFullReport();
+        return res.status(400).json({ success: false, error: 'Invalid SQL connection parameters', logFile: reportFile });
     }
 
     const config = {
@@ -432,25 +949,37 @@ app.post('/api/sql/connect', async (req, res) => {
         // Probar la conexión
         const result = await sqlPool.request().query('SELECT 1 as test');
         logger.info('[SQL] Conexión exitosa a SQL Server');
+        console.log('🔍 [SQL DEBUG] Basic connection test successful');
 
-        // Ensure necessary tables and columns exist immediately after connecting
-        try {
-            await ensureSqlTables();
-        } catch (migrationError) {
-            logger.error('[SQL] Error ensuring tables:', migrationError.message);
-            await sqlPool.close().catch(() => {});
-            sqlPool = null;
-            return res.status(500).json({ success: false, error: migrationError.message });
-        }
+        // Skip automatic table creation to avoid constraint conflicts
+        debugLogger.info('SCHEMA', 'Skipping automatic schema setup to avoid constraint errors');
+        console.log('🔍 [SQL DEBUG] Schema setup skipped - connection successful');
+        
+        // Create tables automatically on connection
+        const schemaResult = await ensureCompleteSchema(sqlPool, debugLogger);
+        logger.info('[SQL] Schema setup result:', schemaResult);
 
-        res.json({ success: true });
+        debugLogger.success('CONNECTION', 'SQL Server connection established successfully');
+        console.log('🔍 [SQL DEBUG] About to send success response');
+        const reportFile = debugLogger.saveFullReport();
+        console.log('🔍 [SQL DEBUG] Report file:', reportFile);
+        res.json({ success: true, logFile: reportFile, message: 'Connected successfully without schema creation' });
     } catch (error) {
-        logger.error('[SQL] Error al conectar:', error.message);
+        console.log('❌ [SQL DEBUG] FATAL ERROR during connection process:');
+        console.log('❌ [SQL DEBUG] Error message:', error.message);
+        console.log('❌ [SQL DEBUG] Error stack:', error.stack);
+        console.log('❌ [SQL DEBUG] Error object:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+        
+        debugLogger.logError('CONNECTION', 'FATAL ERROR during connection process', error);
+        
         if (sqlPool) {
+            debugLogger.info('CLEANUP', 'Closing connection pool due to error');
             await sqlPool.close().catch(() => {});
         }
         sqlPool = null;
-        res.status(500).json({ success: false, error: error.message });
+        
+        const reportFile = debugLogger.saveFullReport();
+        res.status(500).json({ success: false, error: error.message, logFile: reportFile, stack: error.stack });
     }
 });
 
@@ -506,21 +1035,208 @@ app.get('/api/sql/clients', async (req, res) => {
     try {
         logger.info('[DEBUG] Querying clients from SQL Server...');
         const result = await sqlPool.request().query(`
-            SELECT client_id, name, name_norm
-            FROM dbo.clients
-            ORDER BY name
+            SELECT 
+                c.client_id, 
+                c.name, 
+                c.name_norm,
+                c.created_at,
+                COUNT(ar.id_reporte) as total_reports,
+                MAX(ar.uploaded_at) as last_upload,
+                SUM(CAST(ISNULL(m.importe_gastado_EUR, 0) as DECIMAL(18,2))) as total_spend,
+                COUNT(DISTINCT m.nombre_del_anuncio) as unique_ads
+            FROM dbo.clients c
+            LEFT JOIN archivos_reporte ar ON c.client_id = ar.client_id
+            LEFT JOIN metricas m ON ar.id_reporte = m.id_reporte
+            GROUP BY c.client_id, c.name, c.name_norm, c.created_at
+            ORDER BY c.name
         `);
         const clients = result.recordset.map(row => ({
             id: row.client_id,
             name: row.name,
             logo: `https://avatar.vercel.sh/${encodeURIComponent(row.name)}.png?text=${row.name.charAt(0).toUpperCase()}`,
-            currency: "EUR", // Default currency for SQL clients
-            metaAccountName: row.name
+            currency: "EUR",
+            metaAccountName: row.name,
+            createdAt: row.created_at,
+            totalReports: row.total_reports || 0,
+            lastUpload: row.last_upload,
+            totalSpend: row.total_spend || 0,
+            uniqueAds: row.unique_ads || 0,
+            hasData: (row.total_reports || 0) > 0
         }));
         logger.info('[DEBUG] Found clients:', clients.length);
         res.json({ success: true, data: clients, count: clients.length });
     } catch (error) {
         logger.error('[SQL] Error al consultar clients:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// --- Obtener anuncios de un cliente específico ---
+/**
+ * Get SQL performance data (alias for /api/performance)
+ */
+app.get('/api/sql/performance', async (req, res) => {
+    try {
+        // Priorizar SQL Server si está conectado
+        if (sqlPool) {
+            logger.info('[Server] Loading performance data from SQL Server');
+            
+            const result = await sqlPool.request().query(`
+                SELECT 
+                    c.client_id,
+                    c.name as client_name,
+                    ar.nombre_archivo,
+                    ar.period_start,
+                    ar.period_end,
+                    ar.uploaded_at,
+                    COUNT(m.id_metricas) as total_records,
+                    SUM(CAST(m.importe_gastado_EUR as DECIMAL(18,2))) as total_spend,
+                    SUM(CAST(m.compras as INT)) as total_purchases,
+                    SUM(CAST(m.impresiones as BIGINT)) as total_impressions,
+                    COUNT(DISTINCT m.nombre_del_anuncio) as unique_ads
+                FROM clients c
+                LEFT JOIN archivos_reporte ar ON c.client_id = ar.client_id
+                LEFT JOIN metricas m ON ar.id_reporte = m.id_reporte
+                GROUP BY c.client_id, c.name, ar.nombre_archivo, ar.period_start, ar.period_end, ar.uploaded_at
+                ORDER BY ar.uploaded_at DESC
+            `);
+            
+            const performanceData = {};
+            
+            result.recordset.forEach(row => {
+                if (!performanceData[row.client_id]) {
+                    performanceData[row.client_id] = {
+                        clientName: row.client_name,
+                        currency: "EUR",
+                        reports: []
+                    };
+                }
+                
+                if (row.nombre_archivo) {
+                    performanceData[row.client_id].reports.push({
+                        fileName: row.nombre_archivo,
+                        periodStart: row.period_start,
+                        periodEnd: row.period_end,
+                        uploadedAt: row.uploaded_at,
+                        totalRecords: row.total_records || 0,
+                        totalSpend: parseFloat(row.total_spend) || 0,
+                        totalPurchases: row.total_purchases || 0,
+                        totalImpressions: row.total_impressions || 0,
+                        uniqueAds: row.unique_ads || 0
+                    });
+                }
+            });
+            
+            logger.info(`[Server] ✅ Retrieved SQL performance data for ${Object.keys(performanceData).length} clients`);
+            
+            res.json({ 
+                success: true, 
+                data: performanceData,
+                clientCount: Object.keys(performanceData).length,
+                source: 'SQL Server'
+            });
+            
+        } else {
+            logger.info('[Server] Using SQLite for performance data');
+            
+            const stmt = db.prepare(`
+                SELECT client_id, record_data 
+                FROM performance_records 
+                ORDER BY created_at DESC
+            `);
+            const rows = stmt.all();
+            
+            const performanceData = {};
+            
+            rows.forEach(row => {
+                if (!performanceData[row.client_id]) {
+                    performanceData[row.client_id] = [];
+                }
+                performanceData[row.client_id].push(JSON.parse(row.record_data));
+            });
+            
+            logger.info(`[Server] ✅ Retrieved SQLite performance data for ${Object.keys(performanceData).length} clients`);
+            
+            res.json({ 
+                success: true, 
+                data: performanceData,
+                clientCount: Object.keys(performanceData).length,
+                totalRecords: rows.length,
+                source: 'SQLite'
+            });
+        }
+        
+    } catch (error) {
+        logger.error('[Server] Error loading SQL performance data:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+});
+
+app.get('/api/sql/clients/:clientId/ads', async (req, res) => {
+    if (!sqlPool) {
+        return res.status(400).json({ success: false, error: 'Not connected to SQL Server' });
+    }
+    
+    const clientId = parseInt(req.params.clientId);
+    if (isNaN(clientId)) {
+        return res.status(400).json({ success: false, error: 'Invalid client ID' });
+    }
+    
+    try {
+        logger.info(`[DEBUG] Getting ads for client ${clientId}`);
+        
+        const result = await sqlPool.request()
+            .input('clientId', sql.Int, clientId)
+            .query(`
+                SELECT 
+                    m.nombre_del_anuncio as ad_name,
+                    m.nombre_de_la_campaña as campaign_name,
+                    m.nombre_del_conjunto_de_anuncios as adset_name,
+                    COUNT(*) as total_records,
+                    SUM(CAST(ISNULL(m.importe_gastado_EUR, 0) as DECIMAL(18,2))) as total_spend,
+                    SUM(CAST(ISNULL(m.compras, 0) as INT)) as total_purchases,
+                    SUM(CAST(ISNULL(m.impresiones, 0) as BIGINT)) as total_impressions,
+                    SUM(CAST(ISNULL(m.clics_todos, 0) as INT)) as total_clicks,
+                    MIN(m.dia) as first_date,
+                    MAX(m.dia) as last_date,
+                    ar.nombre_archivo as report_file
+                FROM metricas m
+                INNER JOIN archivos_reporte ar ON m.id_reporte = ar.id_reporte
+                WHERE ar.client_id = @clientId
+                    AND m.nombre_del_anuncio IS NOT NULL 
+                    AND m.nombre_del_anuncio != ''
+                GROUP BY 
+                    m.nombre_del_anuncio, 
+                    m.nombre_de_la_campaña, 
+                    m.nombre_del_conjunto_de_anuncios,
+                    ar.nombre_archivo
+                ORDER BY total_spend DESC, m.nombre_del_anuncio
+            `);
+        
+        const ads = result.recordset.map(row => ({
+            adName: row.ad_name,
+            campaignName: row.campaign_name,
+            adsetName: row.adset_name,
+            totalRecords: row.total_records,
+            totalSpend: row.total_spend || 0,
+            totalPurchases: row.total_purchases || 0,
+            totalImpressions: row.total_impressions || 0,
+            totalClicks: row.total_clicks || 0,
+            firstDate: row.first_date,
+            lastDate: row.last_date,
+            reportFile: row.report_file,
+            roas: row.total_spend > 0 ? ((row.total_purchases || 0) / row.total_spend) : 0,
+            ctr: row.total_impressions > 0 ? ((row.total_clicks || 0) / row.total_impressions * 100) : 0
+        }));
+        
+        logger.info(`[DEBUG] Found ${ads.length} ads for client ${clientId}`);
+        res.json({ success: true, data: ads, count: ads.length, clientId });
+        
+    } catch (error) {
+        logger.error(`[SQL] Error getting ads for client ${clientId}:`, error.message);
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -669,20 +1385,39 @@ async function initSqlTables(req, res) {
 app.post('/api/sql/init-tables', initSqlTables);
 app.get('/api/sql/init-tables', initSqlTables);
 
-// Drops all known tables (children first to respect FKs)
+// Drops all known tables (children first to respect FKs) and recreates them
 app.delete('/api/sql/tables', async (req, res) => {
     if (!sqlPool) {
         return res.status(400).json({ error: 'Not connected' });
     }
     try {
+        // Drop all tables in deletion order
+        logger.info('[SQL] Dropping all tables...');
         for (const table of TABLE_DELETION_ORDER) {
             await sqlPool
                 .request()
                 .query(`IF OBJECT_ID('${table}', 'U') IS NOT NULL DROP TABLE ${table};`);
         }
-        res.json({ success: true });
+        
+        // Recreate all tables using the schema function
+        logger.info('[SQL] Recreating all tables...');
+        const schemaResult = await ensureCompleteSchema(sqlPool, logger);
+        
+        if (schemaResult.success) {
+            res.json({ 
+                success: true, 
+                message: `All tables dropped and recreated. ${schemaResult.tablesCreated} tables created.`,
+                tablesCreated: schemaResult.tablesCreated 
+            });
+        } else {
+            res.status(500).json({ 
+                success: false, 
+                error: 'Tables dropped but recreation failed',
+                details: schemaResult 
+            });
+        }
     } catch (error) {
-        logger.error('[SQL] Error dropping tables:', error.message);
+        logger.error('[SQL] Error dropping/recreating tables:', error.message);
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -693,19 +1428,24 @@ app.delete('/api/sql/tables/data', async (req, res) => {
         return res.status(400).json({ error: 'Not connected' });
     }
     try {
+        // Clear data in deletion order to respect foreign keys
         for (const table of TABLE_DELETION_ORDER) {
             await sqlPool
                 .request()
                 .query(`IF OBJECT_ID('${table}', 'U') IS NOT NULL DELETE FROM ${table};`);
         }
-        res.json({ success: true });
+        
+        // Note: Removed automatic recreation of 'Unassigned' client
+        // Clients are created automatically from Excel imports
+        
+        res.json({ success: true, message: 'All data cleared and default client recreated' });
     } catch (error) {
         logger.error('[SQL] Error clearing table data:', error.message);
         res.status(500).json({ success: false, error: error.message });
     }
 });
 
-// --- Import Meta Excel data into SQL Server ---
+// --- Import Meta Excel data into SQL Server (STAR SCHEMA) ---
 app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
     if (!sqlPool) {
         return res.status(400).json({ success: false, error: 'Not connected' });
@@ -714,321 +1454,157 @@ app.post('/api/sql/import-excel', upload.single('file'), async (req, res) => {
         return res.status(400).json({ success: false, error: 'No file uploaded' });
     }
 
-    const allowCreateClient = true; // Always allow creating clients automatically
-    logger.info(`[SQL] ===== STARTING EXCEL IMPORT =====`);
-    logger.info(`[SQL] File: ${req.file.originalname}`);
-    logger.info(`[SQL] File path: ${req.file.path}`);
-    logger.info(`[SQL] Allow create client: ${allowCreateClient}`);
-    
-    // Ensure tables exist before importing - use complete schema
-    logger.info(`[SQL] Step 1: Ensuring SQL tables exist...`);
-    try {
-        const schemaResult = await ensureCompleteSchema(sqlPool, logger);
-        logger.info(`[SQL] ✅ Schema ensured - ${schemaResult.tablesCreated} tables available`);
-    } catch (tableError) {
-        logger.error(`[SQL] ❌ Table initialization failed:`, tableError);
-        logger.error(`[SQL] Error message:`, tableError.message);
-        logger.error(`[SQL] Error code:`, tableError.code);
-        logger.error(`[SQL] Error number:`, tableError.number);
-        logger.error(`[SQL] Error state:`, tableError.state);
-        logger.error(`[SQL] Error class:`, tableError.class);
-        logger.error(`[SQL] Error severity:`, tableError.severity);
-        logger.error(`[SQL] Error server:`, tableError.serverName);
-        logger.error(`[SQL] Error procedure:`, tableError.procName);
-        logger.error(`[SQL] Error line:`, tableError.lineNumber);
-        logger.error(`[SQL] Full error object:`, JSON.stringify(tableError, null, 2));
-        logger.error(`[SQL] Stack trace:`, tableError.stack);
-        
-        // Try to get more details from SQL Server
-        try {
-            if (sqlPool) {
-                const errorDetailQuery = `
-                    SELECT 
-                        error_number() as ErrorNumber,
-                        error_severity() as ErrorSeverity,
-                        error_state() as ErrorState,
-                        error_procedure() as ErrorProcedure,
-                        error_line() as ErrorLine,
-                        error_message() as ErrorMessage
-                `;
-                logger.error(`[SQL] Attempting to get SQL Server error details...`);
-                const errorDetails = await sqlPool.request().query(errorDetailQuery);
-                logger.error(`[SQL] SQL Server error details:`, errorDetails.recordset);
-            }
-        } catch (detailError) {
-            logger.error(`[SQL] Could not retrieve SQL error details:`, detailError.message);
-        }
-        
-        return res.status(500).json({ 
-            success: false, 
-            error: `Table initialization failed: ${tableError.message}`,
-            details: {
-                code: tableError.code,
-                number: tableError.number,
-                state: tableError.state,
-                class: tableError.class,
-                severity: tableError.severity,
-                server: tableError.serverName,
-                procedure: tableError.procName,
-                line: tableError.lineNumber
-            }
-        });
-    }
+    logger.info(`[Star Schema] ===== STARTING EXCEL IMPORT (STAR SCHEMA) =====`);
+    logger.info(`[Star Schema] File: ${req.file.originalname}`);
     
     try {
-        logger.info(`[SQL] Step 2: Reading Excel file...`);
+        // Import simple functions for current DB structure
+        const { 
+            getOrCreateClientSimple, 
+            processRowSimple, 
+            createReportRecord,
+            detectSpendFieldAndCurrency,
+            extractCurrencyFromRow
+        } = await import('./simple-excel-import.js');
+        
+        // Read Excel file
+        logger.info(`[Star Schema] Reading Excel file...`);
         const fileBuffer = fs.readFileSync(req.file.path);
         const workbook = xlsx.read(fileBuffer, { type: 'buffer' });
         const sheet = workbook.Sheets[workbook.SheetNames[0]];
-        logger.info(`[SQL] ✅ Excel file loaded, sheet: ${workbook.SheetNames[0]}`);
-
-        // Detect and skip title rows like "Raw Data Report"
+        
+        // Detect and skip title rows
         let startRow = 0;
         const firstCell = sheet['A1']?.v;
         if (typeof firstCell === 'string' && firstCell.toLowerCase().includes('raw data report')) {
             startRow = 1;
         }
         const rows = xlsx.utils.sheet_to_json(sheet, { defval: null, range: startRow });
-        logger.info(`[SQL] ✅ Parsed ${rows.length} rows from Excel`);
+        logger.info(`[Star Schema] ✅ Parsed ${rows.length} rows from Excel`);
 
         if (rows.length === 0) {
-            logger.error(`[SQL] ❌ Excel file is empty`);
             return res.status(400).json({ success: false, error: 'Excel file is empty' });
         }
 
-        // Determine client from first row
-        logger.info(`[SQL] Step 3: Determining client from first row...`);
+        // Determine client and currency
         const firstRow = rows[0];
-        logger.info(`[SQL] First row keys:`, Object.keys(firstRow));
+        const clientName = 
+            firstRow['Nombre de la cuenta'] || 
+            firstRow['nombre_de_la_cuenta'] || 
+            firstRow['Account name'] || 
+            'Cliente Desconocido';
         
-        const clientName =
-            firstRow['nombre_de_la_cuenta'] ||
-            firstRow['Nombre de la cuenta'] ||
-            firstRow['Account name'] ||
-            'desconocido';
+        // Detect spend field and currency once
+        const spendInfo = detectSpendFieldAndCurrency(firstRow);
+        const currency = extractCurrencyFromRow(firstRow);
         
-        logger.info(`[SQL] ✅ Client name determined: "${clientName}"`);
-        logger.info(`[SQL] Step 4: Checking if client exists in database...`);
-
-        // Ensure client exists
-        let result;
-        try {
-            result = await sqlPool
-                .request()
-                .input('nombre', sql.VarChar(255), clientName)
-                .query('SELECT client_id FROM clients WHERE name = @nombre');
-            logger.info(`[SQL] ✅ Client lookup query executed successfully`);
-        } catch (clientQueryError) {
-            logger.error(`[SQL] ❌ Client lookup query failed:`, clientQueryError);
-            logger.error(`[SQL] Query was: SELECT client_id FROM clients WHERE name = @nombre`);
-            logger.error(`[SQL] Parameter: @nombre = "${clientName}"`);
-            throw clientQueryError;
-        }
-        let clientId;
-        logger.info(`[SQL] Client lookup result: ${result.recordset.length} records found`);
+        logger.info(`[Star Schema] Client determined: "${clientName}" with currency: ${currency}`);
+        logger.info(`[Star Schema] Spend field detected: "${spendInfo.field}" (${spendInfo.currency})`);
         
-        if (result.recordset.length === 0) {
-            logger.info(`[SQL] Client "${clientName}" not found. allowCreateClient = ${allowCreateClient}`);
-            
-            if (!allowCreateClient) {
-                logger.error(`[SQL] ❌ Client creation not allowed`);
-                return res.status(400).json({ success: false, error: `Client ${clientName} not found` });
-            }
-            
-            logger.info(`[SQL] Step 5: Creating new client "${clientName}"...`);
-            try {
-                // Import normalizeName function
-                const { normalizeName } = await import('./lib/normalizeName.js');
-                const normalizedName = normalizeName(clientName);
-                
-                result = await sqlPool
-                    .request()
-                    .input('nombre', sql.VarChar(255), clientName)
-                    .input('nombre_norm', sql.VarChar(255), normalizedName)
-                    .query('INSERT INTO clients (name, name_norm) OUTPUT INSERTED.client_id VALUES (@nombre, @nombre_norm)');
-                clientId = result.recordset[0].client_id;
-                logger.info(`[SQL] ✅ Client created successfully with ID: ${clientId}`);
-            } catch (createClientError) {
-                logger.error(`[SQL] ❌ Failed to create client:`, createClientError);
-                throw createClientError;
-            }
-        } else {
-            clientId = result.recordset[0].client_id;
-            logger.info(`[SQL] ✅ Existing client found with ID: ${clientId}`);
-        }
-
-        const uniqueDays = new Set();
-        const records = [];
-        const fileUniqueIds = new Set();
-
-        for (const row of rows) {
-            const normalized = {};
-            const original = {};
-            for (const [k, v] of Object.entries(row)) {
-                const nk = normalizeKey(k);
-                original[nk] = v;
-                const colName = META_FIELD_MAPPING.get(nk);
-                if (colName) {
-                    if (NUMERIC_COLUMNS.has(colName)) {
-                        normalized[colName] = parseNumber(v);
-                    } else if (DATE_COLUMNS.has(colName)) {
-                        const d = parseDateForSort(v);
-                        normalized[colName] = d ? new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())) : null;
-                    } else {
-                        normalized[colName] = v;
-                    }
-                }
-            }
-            const uniqueId = `${original.dia || original.day}_${
-                original.nombre_de_la_campana || original.campaign_name || ''
-            }_${
-                original.nombre_del_anuncio || original.ad_name || ''
-            }_${original.edad || original.age || ''}_${original.sexo || original.gender || ''}`;
-            if (!uniqueId || fileUniqueIds.has(uniqueId)) {
-                continue;
-            }
-            fileUniqueIds.add(uniqueId);
-            normalized.unique_id = uniqueId;
-            records.push(normalized);
-            const dayValue = original.dia || original.day;
-            if (dayValue) uniqueDays.add(dayValue);
-        }
-
-        const parsedDates = Array.from(uniqueDays)
-            .map(parseDateForSort)
-            .filter(d => d !== null);
-        const periodStart =
-            parsedDates.length > 0
-                ? new Date(Math.min(...parsedDates.map(d => d.getTime())))
-                      .toISOString()
-                      .split('T')[0]
-                : null;
-        const periodEnd =
-            parsedDates.length > 0
-                ? new Date(Math.max(...parsedDates.map(d => d.getTime())))
-                      .toISOString()
-                      .split('T')[0]
-                : null;
-        const daysDetected = uniqueDays.size;
-
-        // Create or reuse report record
+        // Get or create client
+        const clientID = await getOrCreateClientSimple(sqlPool, clientName, currency);
+        logger.info(`[Star Schema] Client ID: ${clientID}`);
+        
+        // Calculate file hash and periods
+        const crypto = await import('crypto');
         const fileHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
-
-        // Check if this file was already imported
-        const existingReport = await sqlPool
-            .request()
+        
+        // Check if already imported
+        const existingReport = await sqlPool.request()
             .input('hash_archivo', sql.Char(64), fileHash)
             .query('SELECT id_reporte FROM archivos_reporte WHERE hash_archivo = @hash_archivo');
-
+            
         if (existingReport.recordset.length > 0) {
-            return res.status(400).json({ success: false, error: 'Este archivo ya fue importado anteriormente' });
-        }
-
-        const report = await sqlPool
-            .request()
-            .input('client_id', sql.Int, clientId)
-            .input('nombre_archivo', sql.VarChar(255), req.file.originalname)
-            .input('hash_archivo', sql.Char(64), fileHash)
-            .input('period_start', sql.Date, periodStart)
-            .input('period_end', sql.Date, periodEnd)
-            .input('days_detected', sql.Int, daysDetected)
-            .query(
-                'INSERT INTO archivos_reporte (client_id, nombre_archivo, hash_archivo, period_start, period_end, days_detected) OUTPUT INSERTED.id_reporte VALUES (@client_id, @nombre_archivo, @hash_archivo, @period_start, @period_end, @days_detected)'
-            );
-        const reportId = report.recordset[0].id_reporte;
-
-        let inserted = 0;
-        let updated = 0;
-        let skipped = rows.length - records.length;
-
-        const transaction = new sql.Transaction(sqlPool);
-        await transaction.begin();
-        try {
-            const metricCols = METRIC_COLUMNS.filter(c => c !== 'unique_id');
-            const allParams = ['id_reporte', 'unique_id', ...metricCols];
-
-            // Create a safe parameter name (ASCII only) for each column/param
-            const toParam = (col) => 'p_' + normalizeKey(col);
-
-            const updateCols = metricCols; // exclude id_reporte from SET
-
-            logger.info(`[SQL] Starting to process ${records.length} records for import`);
-        for (const rec of records) {
-                rec.id_reporte = reportId;
-
-                // First attempt an update within the same report
-                const updateReq = transaction.request();
-                updateReq.input(toParam('unique_id'), MSSQL_TYPE_MAP.get('unique_id') || sql.VarChar(255), rec.unique_id);
-                updateReq.input(toParam('id_reporte'), sql.Int, reportId);
-                updateCols.forEach(col => {
-                    const type = MSSQL_TYPE_MAP.get(col) || sql.VarChar(sql.MAX);
-                    updateReq.input(toParam(col), type, rec[col] ?? null);
-                });
-                const updateResult = await updateReq.query(
-                    `UPDATE metricas SET ${updateCols
-                        .map(c => `[${c}] = @${toParam(c)}`)
-                        .join(', ')} WHERE unique_id = @${toParam('unique_id')} AND id_reporte = @${toParam('id_reporte')}`
-                );
-
-                if (updateResult.rowsAffected[0] > 0) {
-                    updated++;
-                    logger.info(`[SQL] Updated record with unique_id: ${rec.unique_id}`);
-                    continue;
-                }
-
-                // If no rows updated, insert new record
-                const insertReq = transaction.request();
-                allParams.forEach(col => {
-                    const type = MSSQL_TYPE_MAP.get(col) || sql.VarChar(sql.MAX);
-                    const paramType = col === 'id_reporte' ? sql.Int : type;
-                    insertReq.input(toParam(col), paramType, rec[col] ?? null);
-                });
-                await insertReq.query(
-                    `INSERT INTO metricas (${allParams.map(c => `[${c}]`).join(', ')}) VALUES (${allParams
-                        .map(c => `@${toParam(c)}`)
-                        .join(', ')})`
-                );
-                inserted++;
-                logger.info(`[SQL] Inserted new record with unique_id: ${rec.unique_id}`);
-            }
-
-            await transaction.commit();
-            logger.info(`[SQL] Transaction committed successfully. Inserted: ${inserted}, Updated: ${updated}, Skipped: ${skipped}`);
-        } catch (err) {
-            await transaction.rollback().catch(rbErr => {
-                logger.error('[SQL] Rollback failed:', rbErr);
+            return res.status(400).json({ 
+                success: false, 
+                error: 'Este archivo ya fue importado anteriormente' 
             });
-            throw err;
+        }
+        
+        // Calculate date range
+        const uniqueDays = new Set();
+        rows.forEach(row => {
+            const dayValue = row['Día'] || row['dia'] || row['Day'];
+            if (dayValue) uniqueDays.add(dayValue);
+        });
+        
+        const dates = Array.from(uniqueDays).map(d => new Date(d)).filter(d => !isNaN(d.getTime()));
+        const periodStart = dates.length > 0 ? new Date(Math.min(...dates)).toISOString().split('T')[0] : null;
+        const periodEnd = dates.length > 0 ? new Date(Math.max(...dates)).toISOString().split('T')[0] : null;
+        
+        // Create report record
+        const reportId = await createReportRecord(
+            sqlPool, clientID, req.file.originalname, fileHash, 
+            periodStart, periodEnd, uniqueDays.size
+        );
+        logger.info(`[Star Schema] Report ID: ${reportId}`);
+
+        // Process rows
+        let processed = 0;
+        let errors = 0;
+        let skipped = 0;
+
+        for (let i = 0; i < rows.length; i++) {
+            const row = rows[i];
+            
+            // Skip rows without essential data
+            const hasDay = row['Día'] || row['dia'] || row['Day'];
+            const hasCampaign = row['Nombre de la campaña'] || row['nombre_de_la_campana'] || row['Campaign name'];
+            const hasAdName = row['Nombre del anuncio'] || row['nombre_del_anuncio'] || row['Ad name'];
+            
+            if (!hasDay || !hasCampaign || !hasAdName) {
+                skipped++;
+                continue;
+            }
+            
+            try {
+                const result = await processRowSimple(sqlPool, row, clientID, reportId, spendInfo);
+                if (result.success) {
+                    processed++;
+                    if (processed % 100 === 0) {
+                        logger.info(`[Star Schema] Processed ${processed} rows...`);
+                    }
+                } else {
+                    skipped++;
+                }
+            } catch (rowError) {
+                errors++;
+                logger.warn(`[Star Schema] Error processing row ${i + 1}:`, rowError.message);
+            }
         }
 
-        const history = {
-            id: crypto.randomUUID(),
-            timestamp: new Date().toISOString(),
-            source: 'sql',
+        // Save import history
+        const historyData = {
             fileName: req.file.originalname,
-            fileHash,
-            clientName,
-            description: `${inserted} insertados, ${updated} actualizados, ${skipped} omitidos`,
-            undoData: { type: 'sql', keys: [], clientId: String(clientId) },
-            periodStart,
-            periodEnd,
-            daysDetected
+            recordsProcessed: processed,
+            errorsCount: errors,
+            skippedCount: skipped,
+            clientName: clientName,
+            timestamp: new Date().toISOString(),
+            description: `Star Schema Import: ${processed} processed, ${errors} errors, ${skipped} skipped`
         };
-        await sqlPool
-            .request()
+        
+        await sqlPool.request()
             .input('source', sql.VarChar(50), 'meta-excel')
-            .input('payload', sql.NVarChar(sql.MAX), JSON.stringify(history))
-            .query('INSERT INTO import_history (source, payload) VALUES (@source, @payload)');
+            .input('batch_data', sql.VarChar(sql.MAX), JSON.stringify(historyData))
+            .query(`
+                INSERT INTO import_history (source, batch_data) 
+                VALUES (@source, @batch_data)
+            `);
 
-        res.json({ success: true, inserted, updated, skipped, clientName, periodStart, periodEnd });
+        logger.info(`[Star Schema] ✅ Import completed: ${processed} processed, ${errors} errors, ${skipped} skipped`);
+        
+        res.json({ 
+            success: true, 
+            processed, 
+            errors, 
+            skipped,
+            clientName,
+            message: `Successfully imported ${processed} records for ${clientName}`
+        });
+
     } catch (error) {
-        logger.error('[SQL] ❌ ERROR IMPORTING EXCEL:');
-        logger.error('[SQL] Error message:', error.message);
-        logger.error('[SQL] Error code:', error.code);
-        logger.error('[SQL] Error number:', error.number);
-        logger.error('[SQL] Error state:', error.state);
-        logger.error('[SQL] Full error object:', error);
-        logger.error('[SQL] Stack trace:', error.stack);
+        logger.error('[Star Schema] ❌ ERROR IMPORTING EXCEL:', error.message);
         res.status(500).json({ success: false, error: error.message });
     } finally {
         fs.unlink(req.file.path, () => {});
@@ -1041,8 +1617,29 @@ app.get('/api/sql/import-history', async (req, res) => {
         return res.status(400).json({ success: false, error: 'Not connected' });
     }
     try {
-    const result = await sqlPool.request().query('SELECT payload FROM import_history ORDER BY created_at DESC');
-    const history = result.recordset.map(r => JSON.parse(r.payload));
+    const result = await sqlPool.request().query('SELECT id, source, batch_data, created_at FROM import_history ORDER BY created_at DESC');
+    const history = result.recordset.map(r => {
+        try {
+            const data = JSON.parse(r.batch_data || '{}');
+            return {
+                id: r.id,
+                source: r.source,
+                fileName: data.fileName || 'Unknown',
+                recordsProcessed: data.recordsProcessed || 0,
+                timestamp: r.created_at,
+                description: data.description || 'Legacy import'
+            };
+        } catch (parseError) {
+            return {
+                id: r.id,
+                source: r.source,
+                fileName: 'Parse Error',
+                recordsProcessed: 0,
+                timestamp: r.created_at,
+                description: 'Could not parse batch_data'
+            };
+        }
+    });
         res.json({ success: true, history });
     } catch (error) {
         logger.error('[Server] Error loading SQL import history:', error);
@@ -1055,21 +1652,28 @@ app.post('/api/sql/ensure-schema', async (req, res) => {
     if (!sqlPool) {
         return res.status(400).json({ ok: false, error: 'Not connected' });
     }
-    logger.info('[SQL][EnsureSchema] Creating complete database schema...');
+    logger.info('[SQL][EnsureSchema] Starting schema creation...');
     
     try {
         const result = await ensureCompleteSchema(sqlPool, logger);
-        logger.info('[SQL][EnsureSchema] ✅ Complete schema creation process finished');
+        
+        logger.info('[SQL][EnsureSchema] ✅ Schema setup completed:', result);
         res.json({ 
-            ok: true, 
-            actions: result.actions, 
+            ok: result.success, 
+            actions: result.actions || [], 
             db: sqlPool.config.database, 
             schema: 'dbo',
-            tablesCreated: result.tablesCreated
+            tablesCreated: result.tablesCreated || 0,
+            message: result.message || 'Schema creation completed'
         });
     } catch (error) {
-        logger.error('[SQL][EnsureSchema] error', error);
-        res.status(500).json({ ok: false, error: error.message, actions: [] });
+        logger.error('[SQL][EnsureSchema] Error:', error.message);
+        res.status(500).json({ 
+            ok: false, 
+            error: error.message,
+            db: sqlPool.config.database, 
+            schema: 'dbo'
+        });
     }
 });
 
@@ -1391,32 +1995,97 @@ app.post('/api/performance/:clientId', (req, res) => {
 /**
  * Get performance data for all clients
  */
-app.get('/api/performance', (req, res) => {
+app.get('/api/performance', async (req, res) => {
     try {
-        const stmt = db.prepare(`
-            SELECT client_id, record_data 
-            FROM performance_records 
-            ORDER BY created_at DESC
-        `);
-        const rows = stmt.all();
-        
-        const performanceData = {};
-        
-        rows.forEach(row => {
-            if (!performanceData[row.client_id]) {
-                performanceData[row.client_id] = [];
-            }
-            performanceData[row.client_id].push(JSON.parse(row.record_data));
-        });
-        
-        logger.info(`[Server] ✅ Retrieved performance data for ${Object.keys(performanceData).length} clients`);
-        
-        res.json({ 
-            success: true, 
-            data: performanceData,
-            clientCount: Object.keys(performanceData).length,
-            totalRecords: rows.length
-        });
+        // Priorizar SQL Server si está conectado
+        if (sqlPool) {
+            logger.info('[Server] Loading performance data from SQL Server');
+            
+            const result = await sqlPool.request().query(`
+                SELECT 
+                    c.client_id,
+                    c.name as client_name,
+                    ar.nombre_archivo,
+                    ar.period_start,
+                    ar.period_end,
+                    ar.uploaded_at,
+                    COUNT(m.id_metricas) as total_records,
+                    SUM(CAST(m.importe_gastado_EUR as DECIMAL(18,2))) as total_spend,
+                    SUM(CAST(m.compras as INT)) as total_purchases,
+                    SUM(CAST(m.impresiones as BIGINT)) as total_impressions,
+                    COUNT(DISTINCT m.nombre_del_anuncio) as unique_ads
+                FROM clients c
+                LEFT JOIN archivos_reporte ar ON c.client_id = ar.client_id
+                LEFT JOIN metricas m ON ar.id_reporte = m.id_reporte
+                GROUP BY c.client_id, c.name, ar.nombre_archivo, ar.period_start, ar.period_end, ar.uploaded_at
+                ORDER BY ar.uploaded_at DESC
+            `);
+            
+            const performanceData = {};
+            
+            result.recordset.forEach(row => {
+                if (!performanceData[row.client_id]) {
+                    performanceData[row.client_id] = {
+                        clientName: row.client_name,
+                        currency: "EUR",
+                        reports: []
+                    };
+                }
+                
+                if (row.nombre_archivo) {
+                    performanceData[row.client_id].reports.push({
+                        fileName: row.nombre_archivo,
+                        periodStart: row.period_start,
+                        periodEnd: row.period_end,
+                        uploadedAt: row.uploaded_at,
+                        totalRecords: row.total_records || 0,
+                        totalSpend: row.total_spend || 0,
+                        totalPurchases: row.total_purchases || 0,
+                        totalImpressions: row.total_impressions || 0,
+                        uniqueAds: row.unique_ads || 0
+                    });
+                }
+            });
+            
+            logger.info(`[Server] ✅ Retrieved SQL performance data for ${Object.keys(performanceData).length} clients`);
+            
+            res.json({ 
+                success: true, 
+                data: performanceData,
+                clientCount: Object.keys(performanceData).length,
+                source: 'SQL Server'
+            });
+            
+        } else {
+            // Fallback a SQLite si SQL Server no está disponible
+            logger.info('[Server] SQL Server not available, using SQLite fallback');
+            
+            const stmt = db.prepare(`
+                SELECT client_id, record_data 
+                FROM performance_records 
+                ORDER BY created_at DESC
+            `);
+            const rows = stmt.all();
+            
+            const performanceData = {};
+            
+            rows.forEach(row => {
+                if (!performanceData[row.client_id]) {
+                    performanceData[row.client_id] = [];
+                }
+                performanceData[row.client_id].push(JSON.parse(row.record_data));
+            });
+            
+            logger.info(`[Server] ✅ Retrieved SQLite performance data for ${Object.keys(performanceData).length} clients`);
+            
+            res.json({ 
+                success: true, 
+                data: performanceData,
+                clientCount: Object.keys(performanceData).length,
+                totalRecords: rows.length,
+                source: 'SQLite'
+            });
+        }
         
     } catch (error) {
         logger.error('[Server] Error loading performance data:', error);
