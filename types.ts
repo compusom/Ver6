@@ -151,7 +151,7 @@ export interface PerformanceRecord {
   pageLikes: number;
   addsToCart: number;
   checkoutsInitiatedOnWebsite: number;
-  campaignBudget: string;
+  campaignBudget: number;
   campaignBudgetType: string;
   includedCustomAudiences: string;
   excludedCustomAudiences: string;
@@ -162,7 +162,7 @@ export interface PerformanceRecord {
   postInteractions: number;
   postReactions: number;
   postShares: number;
-  bid: string;
+  bid: number;
   bidType: string;
   websiteUrl: string;
   ctrLink: number;
@@ -184,7 +184,8 @@ export interface PerformanceRecord {
   aov: number;
   lpViewRate: number;
   adcToLpv: number;
-  videoCapture: string;
+  videoCapture: number;
+  videoCaptureFinal: number;
   landingConversionRate: number;
   percentPurchases: number;
   visualizations: number;
