@@ -3,7 +3,7 @@ import React from 'react';
 import { AggregatedAdPerformance } from '../types';
 
 interface AggregatedPerformanceTableProps {
-    data: AggregatedAdPerformance[];
+    data?: AggregatedAdPerformance[];
     onShowMetricsDetail: (ad: AggregatedAdPerformance) => void;
     onShowAnalysisDetail: (ad: AggregatedAdPerformance) => void;
     onUpdateAnalysis: (ad: AggregatedAdPerformance) => void;
@@ -11,9 +11,9 @@ interface AggregatedPerformanceTableProps {
     generatingAnalysis: { [adName: string]: boolean };
 }
 
-export const AggregatedPerformanceTable: React.FC<AggregatedPerformanceTableProps> = ({ data, onShowMetricsDetail, onShowAnalysisDetail, onUpdateAnalysis, onUploadVideo, generatingAnalysis }) => {
-    
-    if (data.length === 0) {
+export const AggregatedPerformanceTable: React.FC<AggregatedPerformanceTableProps> = ({ data = [], onShowMetricsDetail, onShowAnalysisDetail, onUpdateAnalysis, onUploadVideo, generatingAnalysis }) => {
+
+    if (!Array.isArray(data) || data.length === 0) {
         return <p className="text-brand-text-secondary text-center py-8">No hay datos de rendimiento para el rango de fechas y filtro seleccionado.</p>;
     }
     

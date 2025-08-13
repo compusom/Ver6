@@ -303,11 +303,16 @@ const App: React.FC = () => {
     }, [dataSource]);
 
     const refreshPerformance = useCallback(async () => {
-        const loaded = await getPerformance(dataSource);
-        const entries = Object.entries(loaded).filter(([_, v]) => Array.isArray(v));
-        const hasNamed = entries.some(([k]) => k !== 'default');
-        const filtered = entries.filter(([k]) => (hasNamed ? k !== 'default' : true));
-        setPerformanceData(Object.fromEntries(filtered));
+        try {
+            const loaded = await getPerformance(dataSource);
+            const entries = Object.entries(loaded).filter(([_, v]) => Array.isArray(v));
+            const hasNamed = entries.some(([k]) => k !== 'default');
+            const filtered = entries.filter(([k]) => (hasNamed ? k !== 'default' : true));
+            setPerformanceData(Object.fromEntries(filtered));
+        } catch (error: any) {
+            console.error('[App] Error loading performance data:', error);
+            notify('Error cargando datos SQL: ' + (error?.message || error), 'error');
+        }
     }, [dataSource]);
 
     useEffect(() => {
