@@ -2506,7 +2506,7 @@ app.post('/api/sql/create-dimensional-procedure', async (req, res) => {
 // --- Initialize dimensional system ---
 app.post('/api/sql/initialize-dimensional', async (req, res) => {
     if (!sqlPool) {
-        return res.status(400).json({ success: false, error: 'No conectado a SQL Server' });
+        return res.status(400).json({ success: false, error: 'SQL Server not connected - dimensional system requires SQL Server mode' });
     }
     
     try {
@@ -2579,7 +2579,13 @@ app.post('/api/sql/initialize-dimensional', async (req, res) => {
 // --- Get dimensional system status ---
 app.get('/api/sql/dimensional-status', async (req, res) => {
     if (!sqlPool) {
-        return res.status(400).json({ success: false, error: 'No conectado a SQL Server' });
+        // In local mode, dimensional system is not available
+        return res.json({ 
+            success: true, 
+            status: 'not_initialized',
+            tablesExist: false,
+            message: 'SQL Server not connected - dimensional system requires SQL Server mode'
+        });
     }
     
     try {
@@ -2625,7 +2631,7 @@ app.get('/api/sql/dimensional-status', async (req, res) => {
 // --- Drop dimensional system ---
 app.post('/api/sql/drop-dimensional', async (req, res) => {
     if (!sqlPool) {
-        return res.status(400).json({ success: false, error: 'No conectado a SQL Server' });
+        return res.status(400).json({ success: false, error: 'SQL Server not connected - dimensional system requires SQL Server mode' });
     }
     
     try {
@@ -2736,7 +2742,7 @@ async function getDimensionalStats() {
 // --- Get performance data from dimensional system ---
 app.post('/api/sql/dimensional-performance', async (req, res) => {
     if (!sqlPool) {
-        return res.status(400).json({ success: false, error: 'No conectado a SQL Server' });
+        return res.status(400).json({ success: false, error: 'SQL Server not connected - dimensional system requires SQL Server mode' });
     }
     
     try {
