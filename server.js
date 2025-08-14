@@ -2503,6 +2503,351 @@ app.post('/api/sql/create-dimensional-procedure', async (req, res) => {
     }
 });
 
+// --- Initialize dimensional system ---
+app.post('/api/sql/initialize-dimensional', async (req, res) => {
+    if (!sqlPool) {
+        return res.status(400).json({ success: false, error: 'No conectado a SQL Server' });
+    }
+    
+    try {
+        logger.info('[Dimensional] Initializing dimensional system...');
+        
+        // Read and execute the dimensional integration script
+        const fs = require('fs');
+        const path = require('path');
+        const scriptPath = path.join(__dirname, 'database', 'dimensional_integration.sql');
+        
+        if (!fs.existsSync(scriptPath)) {
+            throw new Error('Dimensional integration script not found');
+        }
+        
+        const sqlScript = fs.readFileSync(scriptPath, 'utf8');
+        
+        // Split into individual statements and execute
+        const statements = sqlScript
+            .split(';')
+            .map(stmt => stmt.trim())
+            .filter(stmt => stmt.length > 0 && !stmt.startsWith('--'));
+        
+        let executedStatements = 0;
+        const errors = [];
+        
+        for (const statement of statements) {
+            if (statement.toLowerCase().includes('create') || 
+                statement.toLowerCase().includes('insert')) {
+                try {
+                    await sqlPool.request().query(statement);
+                    executedStatements++;
+                } catch (stmtError) {
+                    logger.warn(`[Dimensional] Error executing statement: ${stmtError.message}`);
+                    errors.push(`Statement ${executedStatements + 1}: ${stmtError.message}`);
+                }
+            }
+        }
+        
+        // Initialize control record
+        try {
+            await sqlPool.request().query(`
+                INSERT INTO dw_control (system_version, dimensional_enabled, migration_status)
+                VALUES ('v6.1.0', 1, 'completed')
+            `);
+        } catch (controlError) {
+            logger.warn('[Dimensional] Control record may already exist:', controlError.message);
+        }
+        
+        // Get system stats
+        const stats = await getDimensionalStats();
+        
+        logger.success(`[Dimensional] System initialized: ${executedStatements} statements executed`);
+        
+        res.json({ 
+            success: true, 
+            message: 'Dimensional system initialized successfully',
+            stats: {
+                statementsExecuted: executedStatements,
+                errors: errors.length,
+                systemStats: stats
+            }
+        });
+        
+    } catch (error) {
+        logger.error('[Dimensional] Error initializing dimensional system:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// --- Get dimensional system status ---
+app.get('/api/sql/dimensional-status', async (req, res) => {
+    if (!sqlPool) {
+        return res.status(400).json({ success: false, error: 'No conectado a SQL Server' });
+    }
+    
+    try {
+        // Check if dimensional tables exist
+        const tablesExist = await checkDimensionalTables();
+        
+        if (!tablesExist) {
+            return res.json({ 
+                success: true, 
+                status: 'not_initialized',
+                tablesExist: false
+            });
+        }
+        
+        // Get config from control table
+        let config = null;
+        try {
+            const result = await sqlPool.request().query(`
+                SELECT TOP 1 * FROM dw_control ORDER BY control_id DESC
+            `);
+            config = result.recordset[0] || null;
+        } catch (configError) {
+            logger.warn('[Dimensional] Could not load config:', configError.message);
+        }
+        
+        // Get system stats
+        const stats = await getDimensionalStats();
+        
+        res.json({ 
+            success: true, 
+            status: config?.dimensional_enabled ? 'ready' : 'disabled',
+            tablesExist: true,
+            config: config,
+            stats: stats
+        });
+        
+    } catch (error) {
+        logger.error('[Dimensional] Error getting dimensional status:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// --- Drop dimensional system ---
+app.post('/api/sql/drop-dimensional', async (req, res) => {
+    if (!sqlPool) {
+        return res.status(400).json({ success: false, error: 'No conectado a SQL Server' });
+    }
+    
+    try {
+        logger.info('[Dimensional] Dropping dimensional system...');
+        
+        // List of tables in dependency order (reverse)
+        const tables = [
+            'fact_meta_daily',
+            'bridge_adset_audience_included',
+            'bridge_adset_audience_excluded', 
+            'dim_ad',
+            'dim_adset',
+            'dim_campaign',
+            'dim_audience',
+            'dim_url',
+            'dim_status',
+            'dim_budget_type',
+            'dim_objective',
+            'dim_account',
+            'dim_currency',
+            'dim_age',
+            'dim_gender',
+            'dim_date',
+            'etl_batches',
+            'dw_control'
+        ];
+        
+        let droppedTables = 0;
+        const errors = [];
+        
+        for (const table of tables) {
+            try {
+                await sqlPool.request().query(`DROP TABLE IF EXISTS ${table}`);
+                droppedTables++;
+            } catch (dropError) {
+                logger.warn(`[Dimensional] Failed to drop table ${table}:`, dropError.message);
+                errors.push(`Table ${table}: ${dropError.message}`);
+            }
+        }
+        
+        logger.success(`[Dimensional] System dropped: ${droppedTables} tables removed`);
+        
+        res.json({ 
+            success: true, 
+            message: 'Dimensional system dropped successfully',
+            stats: {
+                tablesDropped: droppedTables,
+                errors: errors.length
+            }
+        });
+        
+    } catch (error) {
+        logger.error('[Dimensional] Error dropping dimensional system:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Helper function to check if dimensional tables exist
+async function checkDimensionalTables() {
+    try {
+        const result = await sqlPool.request().query(`
+            SELECT TABLE_NAME as name 
+            FROM INFORMATION_SCHEMA.TABLES 
+            WHERE TABLE_SCHEMA = 'dbo' 
+            AND TABLE_NAME IN ('dim_date', 'dim_account', 'fact_meta_daily', 'dw_control')
+        `);
+        return Array.isArray(result.recordset) && result.recordset.length >= 3;
+    } catch (error) {
+        return false;
+    }
+}
+
+// Helper function to get dimensional system statistics
+async function getDimensionalStats() {
+    try {
+        const stats = {};
+        
+        // Check individual tables
+        const tables = ['dim_account', 'dim_campaign', 'dim_adset', 'dim_ad', 'fact_meta_daily', 'etl_batches'];
+        
+        for (const table of tables) {
+            try {
+                const result = await sqlPool.request().query(`SELECT COUNT(*) as count FROM ${table}`);
+                stats[table] = result.recordset[0]?.count || 0;
+            } catch (tableError) {
+                stats[table] = 0;
+            }
+        }
+        
+        // Get date range
+        try {
+            const dateRange = await sqlPool.request().query(`
+                SELECT MIN(date) as min_date, MAX(date) as max_date
+                FROM fact_meta_daily
+            `);
+            stats.dateRange = dateRange.recordset[0] || {};
+        } catch (dateError) {
+            stats.dateRange = {};
+        }
+        
+        return stats;
+        
+    } catch (error) {
+        return {};
+    }
+}
+
+// --- Get performance data from dimensional system ---
+app.post('/api/sql/dimensional-performance', async (req, res) => {
+    if (!sqlPool) {
+        return res.status(400).json({ success: false, error: 'No conectado a SQL Server' });
+    }
+    
+    try {
+        const { filters = {} } = req.body;
+        
+        // Check if dimensional tables exist and have data
+        const tablesExist = await checkDimensionalTables();
+        if (!tablesExist) {
+            return res.json({ success: true, data: [], message: 'Dimensional system not initialized' });
+        }
+        
+        // Build the query with filters
+        let sql = `
+            SELECT 
+                account_name,
+                campaign_name,
+                adset_name,
+                ad_name,
+                date,
+                age,
+                gender,
+                spend,
+                impressions,
+                reach,
+                frequency,
+                clicks_all,
+                link_clicks,
+                landing_page_views,
+                purchases,
+                conversion_value,
+                'ACTIVE' as adDelivery,
+                currency,
+                roas,
+                cpa,
+                cpm,
+                CASE 
+                    WHEN impressions > 0 THEN CAST((link_clicks * 100.0 / impressions) AS DECIMAL(10,2))
+                    ELSE 0
+                END as ctrLink,
+                thruplays,
+                avg_watch_time,
+                video_3s,
+                video_100
+            FROM v_performance_metrics
+            WHERE 1=1
+        `;
+
+        const params = [];
+        let paramIndex = 1;
+
+        // Apply filters
+        if (filters.startDate) {
+            sql += ` AND date >= @param${paramIndex}`;
+            paramIndex++;
+        }
+
+        if (filters.endDate) {
+            sql += ` AND date <= @param${paramIndex}`;
+            paramIndex++;
+        }
+
+        if (filters.accountName) {
+            sql += ` AND account_name = @param${paramIndex}`;
+            paramIndex++;
+        }
+
+        if (filters.campaignName) {
+            sql += ` AND campaign_name = @param${paramIndex}`;
+            paramIndex++;
+        }
+
+        // Order by date descending
+        sql += ' ORDER BY date DESC, spend DESC';
+
+        // Prepare the request with parameters
+        const request = sqlPool.request();
+        
+        paramIndex = 1;
+        if (filters.startDate) {
+            request.input(`param${paramIndex}`, sql.VarChar, filters.startDate);
+            paramIndex++;
+        }
+        if (filters.endDate) {
+            request.input(`param${paramIndex}`, sql.VarChar, filters.endDate);
+            paramIndex++;
+        }
+        if (filters.accountName) {
+            request.input(`param${paramIndex}`, sql.VarChar, filters.accountName);
+            paramIndex++;
+        }
+        if (filters.campaignName) {
+            request.input(`param${paramIndex}`, sql.VarChar, filters.campaignName);
+            paramIndex++;
+        }
+
+        const result = await request.query(sql);
+        
+        logger.info(`[Dimensional] Retrieved ${result.recordset?.length || 0} performance records`);
+        
+        res.json({ 
+            success: true, 
+            data: result.recordset || [],
+            count: result.recordset?.length || 0
+        });
+
+    } catch (error) {
+        logger.error('[Dimensional] Error getting performance data:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 // --- SQL Server terminal: ejecutar comandos SQL ---
 app.post('/api/sql/execute', async (req, res) => {
     if (!sqlPool) {
