@@ -60,7 +60,9 @@ const InfoPill: React.FC<{ title: string; items: string[]; type: 'included' | 'e
 };
 
 const DemographicsCard: React.FC<{ demographics: DemographicData[] | undefined, currency: string }> = ({ demographics, currency }) => {
-    const [selectedGender, setSelectedGender] = useState<string | null>(null);
+    const [demographicModalOpen, setDemographicModalOpen] = useState(false);
+    const [selectedModalGender, setSelectedModalGender] = useState<'male' | 'female' | 'unknown' | null>(null);
+    const [loadingGender, setLoadingGender] = useState<string | null>(null);
 
     const genderData = useMemo(() => {
         if (!demographics || demographics.length === 0) {
@@ -79,7 +81,7 @@ const DemographicsCard: React.FC<{ demographics: DemographicData[] | undefined, 
     }, [demographics]);
 
     const calculateGenderMetrics = (genderGroup: DemographicData[]) => {
-        if (genderGroup.length === 0) return { roas: 0, ctr: 0, cpa: 0, spend: 0, purchaseValue: 0, purchases: 0, cpm: 0, frequency: 0 };
+        if (genderGroup.length === 0) return { roas: 0, ctr: 0, cpa: 0, spend: 0, purchaseValue: 0, purchases: 0, cpm: 0 };
 
         const totals = genderGroup.reduce((acc, d) => {
             acc.spend += d.spend;
@@ -97,8 +99,7 @@ const DemographicsCard: React.FC<{ demographics: DemographicData[] | undefined, 
             spend: totals.spend,
             purchaseValue: totals.purchaseValue,
             purchases: totals.purchases,
-            cpm: totals.impressions > 0 ? (totals.spend / totals.impressions) * 1000 : 0,
-            frequency: 1 // Placeholder ya que no tenemos reach por demografía
+            cpm: totals.impressions > 0 ? (totals.spend / totals.impressions) * 1000 : 0
         };
     };
 
@@ -106,118 +107,200 @@ const DemographicsCard: React.FC<{ demographics: DemographicData[] | undefined, 
     const femaleMetrics = calculateGenderMetrics(genderData.female);
     const unknownMetrics = calculateGenderMetrics(genderData.unknown);
 
+    const handleGenderClick = async (gender: 'male' | 'female' | 'unknown') => {
+        const genderGroupData = genderData[gender];
+        if (genderGroupData.length === 0) return;
+        
+        setLoadingGender(gender);
+        // Simulate loading (you can remove this if you don't need it)
+        await new Promise(resolve => setTimeout(resolve, 300));
+        
+        setSelectedModalGender(gender);
+        setDemographicModalOpen(true);
+        setLoadingGender(null);
+    };
+
     if (!demographics || demographics.length === 0) {
         return <MetricSubCard title="Rendimiento Demográfico"><p className="text-xs text-brand-text-secondary">No hay datos demográficos.</p></MetricSubCard>;
     }
 
-    const GenderButton: React.FC<{ gender: 'male' | 'female' | 'unknown', metrics: any, count: number }> = ({ gender, metrics, count }) => {
-        const labels = { male: 'Hombres', female: 'Mujeres', unknown: 'Otros' };
-        const isSelected = selectedGender === gender;
+    const GenderCard: React.FC<{ 
+        gender: 'male' | 'female' | 'unknown';
+        metrics: any;
+        count: number;
+        config: { title: string; icon: string; gradient: string; hoverGradient: string; accentColor: string };
+    }> = ({ gender, metrics, count, config }) => {
         const hasData = count > 0;
-
+        const isLoading = loadingGender === gender;
+        
         return (
             <button
-                onClick={() => setSelectedGender(isSelected ? null : gender)}
-                disabled={!hasData}
-                className={`p-3 rounded-lg border transition-all text-left ${
+                onClick={() => handleGenderClick(gender)}
+                disabled={!hasData || isLoading}
+                className={`group relative overflow-hidden rounded-xl border transition-all duration-300 transform text-left p-0 ${
                     !hasData 
                         ? 'opacity-50 cursor-not-allowed border-brand-border/30' 
-                        : isSelected 
-                            ? 'bg-brand-primary/20 border-brand-primary' 
-                            : 'border-brand-border hover:border-brand-primary/50 hover:bg-brand-bg/50'
+                        : 'border-brand-border/50 hover:border-brand-border hover:scale-[1.02] hover:shadow-lg hover:shadow-brand-primary/10'
                 }`}
             >
-                <div className="font-semibold text-brand-text mb-2">{labels[gender]} ({count})</div>
-                {hasData && (
-                    <div className="grid grid-cols-3 gap-2 text-xs">
-                        <div>
-                            <div className="text-brand-text-secondary">ROAS</div>
-                            <div className="font-bold text-brand-text">{metrics.roas.toFixed(2)}</div>
-                        </div>
-                        <div>
-                            <div className="text-brand-text-secondary">CTR</div>
-                            <div className="font-bold text-brand-text">{metrics.ctr.toFixed(2)}%</div>
-                        </div>
-                        <div>
-                            <div className="text-brand-text-secondary">CPA</div>
-                            <div className="font-bold text-brand-text">{metrics.cpa.toLocaleString('es-ES', { style: 'currency', currency })}</div>
+                {/* Loading Overlay */}
+                {isLoading && (
+                    <div className="absolute inset-0 bg-brand-surface/80 backdrop-blur-sm flex items-center justify-center z-10 rounded-xl">
+                        <div className="flex items-center gap-2 text-brand-text">
+                            <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            <span className="text-sm font-medium">Cargando...</span>
                         </div>
                     </div>
                 )}
+                
+                {/* Gradient Background */}
+                <div className={`absolute inset-0 ${config.gradient} opacity-0 group-hover:opacity-100 transition-opacity duration-300`} />
+                
+                {/* Content */}
+                <div className="relative p-5 bg-brand-surface group-hover:bg-transparent transition-colors duration-300">
+                    
+                    {/* Header */}
+                    <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-3">
+                            <div className="text-2xl transform group-hover:scale-110 transition-transform duration-300">
+                                {config.icon}
+                            </div>
+                            <div>
+                                <h4 className="font-bold text-brand-text text-lg group-hover:text-white transition-colors duration-300">
+                                    {config.title}
+                                </h4>
+                                <p className="text-brand-text-secondary group-hover:text-white/80 text-sm transition-colors duration-300">
+                                    {count} grupo{count !== 1 ? 's' : ''} demográfico{count !== 1 ? 's' : ''}
+                                </p>
+                            </div>
+                        </div>
+                        
+                        {hasData && (
+                            <div className="opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                                <svg className="w-5 h-5 text-white transform group-hover:translate-x-1 transition-transform duration-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                                </svg>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Metrics Preview */}
+                    {hasData && (
+                        <div className="grid grid-cols-3 gap-3">
+                            <div className="text-center">
+                                <div className="text-xs text-brand-text-secondary group-hover:text-white/70 font-medium mb-1 transition-colors duration-300">
+                                    ROAS
+                                </div>
+                                <div className={`font-bold text-lg ${config.accentColor} group-hover:text-white transition-colors duration-300`}>
+                                    {metrics.roas.toFixed(2)}
+                                </div>
+                            </div>
+                            
+                            <div className="text-center">
+                                <div className="text-xs text-brand-text-secondary group-hover:text-white/70 font-medium mb-1 transition-colors duration-300">
+                                    CTR
+                                </div>
+                                <div className={`font-bold text-lg ${config.accentColor} group-hover:text-white transition-colors duration-300`}>
+                                    {metrics.ctr.toFixed(2)}%
+                                </div>
+                            </div>
+                            
+                            <div className="text-center">
+                                <div className="text-xs text-brand-text-secondary group-hover:text-white/70 font-medium mb-1 transition-colors duration-300">
+                                    CPA
+                                </div>
+                                <div className={`font-bold text-sm ${config.accentColor} group-hover:text-white transition-colors duration-300`}>
+                                    {metrics.cpa.toLocaleString('es-ES', { style: 'currency', currency, maximumFractionDigits: 0 })}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Empty State */}
+                    {!hasData && (
+                        <div className="text-center py-4">
+                            <p className="text-brand-text-secondary text-sm">Sin datos disponibles</p>
+                        </div>
+                    )}
+                </div>
             </button>
         );
     };
 
-    const getSelectedData = () => {
-        switch(selectedGender) {
-            case 'male': return genderData.male;
-            case 'female': return genderData.female;
-            case 'unknown': return genderData.unknown;
-            default: return [];
+    const genderConfigs = {
+        male: {
+            title: 'Hombres',
+            icon: '👨',
+            gradient: 'bg-gradient-to-br from-blue-500/20 to-cyan-500/20',
+            hoverGradient: 'bg-gradient-to-br from-blue-500 to-cyan-500',
+            accentColor: 'text-blue-400'
+        },
+        female: {
+            title: 'Mujeres',
+            icon: '👩',
+            gradient: 'bg-gradient-to-br from-pink-500/20 to-rose-500/20',
+            hoverGradient: 'bg-gradient-to-br from-pink-500 to-rose-500',
+            accentColor: 'text-pink-400'
+        },
+        unknown: {
+            title: 'Otros',
+            icon: '👤',
+            gradient: 'bg-gradient-to-br from-purple-500/20 to-violet-500/20',
+            hoverGradient: 'bg-gradient-to-br from-purple-500 to-violet-500',
+            accentColor: 'text-purple-400'
         }
     };
 
     return (
-        <MetricSubCard title="Rendimiento Demográfico">
-            <div className="space-y-4">
-                {/* Gender Buttons */}
-                <div className="grid grid-cols-1 gap-2">
-                    <GenderButton gender="male" metrics={maleMetrics} count={genderData.male.length} />
-                    <GenderButton gender="female" metrics={femaleMetrics} count={genderData.female.length} />
-                    <GenderButton gender="unknown" metrics={unknownMetrics} count={genderData.unknown.length} />
-                </div>
-
-                {/* Detailed View */}
-                {selectedGender && (
-                    <div className="border-t border-brand-border/50 pt-4">
-                        <h4 className="font-semibold text-brand-text mb-3">
-                            Detalle por Grupo Etario - {selectedGender === 'male' ? 'Hombres' : selectedGender === 'female' ? 'Mujeres' : 'Otros'}
-                        </h4>
-                        <div className="space-y-3 max-h-60 overflow-y-auto">
-                            {getSelectedData()
-                                .sort((a, b) => (b.spend > 0 ? b.purchaseValue / b.spend : 0) - (a.spend > 0 ? a.purchaseValue / a.spend : 0))
-                                .map((demographic, index) => {
-                                const roas = demographic.spend > 0 ? demographic.purchaseValue / demographic.spend : 0;
-                                const cpa = demographic.purchases > 0 ? demographic.spend / demographic.purchases : 0;
-                                const cpm = demographic.impressions > 0 ? (demographic.spend / demographic.impressions) * 1000 : 0;
-                                const frequency = 1; // Placeholder
-                                const compras = demographic.purchases;
-                                
-                                return (
-                                    <div key={index} className="bg-brand-bg/30 rounded-lg p-3">
-                                        <div className="font-semibold text-brand-text mb-2">
-                                            Edad: {demographic.ageRange}
-                                        </div>
-                                        <div className="grid grid-cols-5 gap-2 text-xs">
-                                            <div>
-                                                <div className="text-brand-text-secondary">ROAS</div>
-                                                <div className="font-bold text-brand-text">{roas.toFixed(2)}</div>
-                                            </div>
-                                            <div>
-                                                <div className="text-brand-text-secondary">CPA</div>
-                                                <div className="font-bold text-brand-text">{cpa.toLocaleString('es-ES', { style: 'currency', currency })}</div>
-                                            </div>
-                                            <div>
-                                                <div className="text-brand-text-secondary">CPM</div>
-                                                <div className="font-bold text-brand-text">{cpm.toLocaleString('es-ES', { style: 'currency', currency })}</div>
-                                            </div>
-                                            <div>
-                                                <div className="text-brand-text-secondary">Frecuencia</div>
-                                                <div className="font-bold text-brand-text">{frequency.toFixed(2)}</div>
-                                            </div>
-                                            <div>
-                                                <div className="text-brand-text-secondary">Compras</div>
-                                                <div className="font-bold text-brand-text">{compras}</div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                );
-                            })}
-                        </div>
+        <>
+            <MetricSubCard title="Rendimiento Demográfico">
+                <div className="space-y-4">
+                    <div className="grid grid-cols-1 gap-4">
+                        <GenderCard 
+                            gender="male" 
+                            metrics={maleMetrics} 
+                            count={genderData.male.length}
+                            config={genderConfigs.male}
+                        />
+                        <GenderCard 
+                            gender="female" 
+                            metrics={femaleMetrics} 
+                            count={genderData.female.length}
+                            config={genderConfigs.female}
+                        />
+                        <GenderCard 
+                            gender="unknown" 
+                            metrics={unknownMetrics} 
+                            count={genderData.unknown.length}
+                            config={genderConfigs.unknown}
+                        />
                     </div>
-                )}
-            </div>
-        </MetricSubCard>
+                    
+                    <div className="text-center pt-2 border-t border-brand-border/30">
+                        <p className="text-xs text-brand-text-secondary">
+                            💡 Haz clic en cualquier género para ver el análisis detallado
+                        </p>
+                    </div>
+                </div>
+            </MetricSubCard>
+
+            {/* Demographic Modal */}
+            {selectedModalGender && (
+                <DemographicModal
+                    isOpen={demographicModalOpen}
+                    onClose={() => {
+                        setDemographicModalOpen(false);
+                        setSelectedModalGender(null);
+                    }}
+                    gender={selectedModalGender}
+                    data={genderData[selectedModalGender]}
+                    currency={currency}
+                />
+            )}
+        </>
     );
 };
 
@@ -472,5 +555,219 @@ export const MetricsDetailModal: React.FC<MetricsDetailModalProps> = ({ isOpen, 
             />
         )}
         </>
+    );
+};
+
+// Modal específico para datos demográficos
+const DemographicModal: React.FC<{
+    isOpen: boolean;
+    onClose: () => void;
+    gender: 'male' | 'female' | 'unknown';
+    data: DemographicData[];
+    currency: string;
+}> = ({ isOpen, onClose, gender, data, currency }) => {
+    if (!isOpen || data.length === 0) return null;
+
+    const genderConfig = {
+        male: {
+            title: 'Rendimiento Masculino',
+            icon: '👨',
+            color: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
+            accentColor: 'text-blue-400'
+        },
+        female: {
+            title: 'Rendimiento Femenino',
+            icon: '👩',
+            color: 'bg-pink-500/20 text-pink-400 border-pink-500/30',
+            accentColor: 'text-pink-400'
+        },
+        unknown: {
+            title: 'Otros Géneros',
+            icon: '👤',
+            color: 'bg-purple-500/20 text-purple-400 border-purple-500/30',
+            accentColor: 'text-purple-400'
+        }
+    };
+
+    const config = genderConfig[gender];
+
+    // Calcular métricas agregadas
+    const totalMetrics = data.reduce((acc, d) => {
+        acc.spend += d.spend;
+        acc.purchaseValue += d.purchaseValue;
+        acc.purchases += d.purchases;
+        acc.impressions += d.impressions;
+        acc.linkClicks += d.linkClicks;
+        return acc;
+    }, { spend: 0, purchaseValue: 0, purchases: 0, impressions: 0, linkClicks: 0 });
+
+    const summaryMetrics = {
+        roas: totalMetrics.spend > 0 ? totalMetrics.purchaseValue / totalMetrics.spend : 0,
+        ctr: totalMetrics.impressions > 0 ? (totalMetrics.linkClicks / totalMetrics.impressions) * 100 : 0,
+        cpa: totalMetrics.purchases > 0 ? totalMetrics.spend / totalMetrics.purchases : 0,
+        cpm: totalMetrics.impressions > 0 ? (totalMetrics.spend / totalMetrics.impressions) * 1000 : 0,
+    };
+
+    // Datos ordenados por ROAS
+    const sortedData = [...data].sort((a, b) => {
+        const roasA = a.spend > 0 ? a.purchaseValue / a.spend : 0;
+        const roasB = b.spend > 0 ? b.purchaseValue / b.spend : 0;
+        return roasB - roasA;
+    });
+
+    const MetricCard: React.FC<{ label: string; value: string; accent?: boolean }> = ({ label, value, accent = false }) => (
+        <div className="bg-brand-bg/50 rounded-xl p-4 text-center border border-brand-border/30">
+            <div className="text-xs text-brand-text-secondary font-medium mb-1">{label}</div>
+            <div className={`text-lg font-bold ${accent ? config.accentColor : 'text-brand-text'}`}>{value}</div>
+        </div>
+    );
+
+    const ProgressBar: React.FC<{ value: number; max: number; color: string }> = ({ value, max, color }) => {
+        const percentage = max > 0 ? Math.min((value / max) * 100, 100) : 0;
+        return (
+            <div className="w-full bg-brand-border/30 rounded-full h-2 overflow-hidden">
+                <div 
+                    className={`h-full transition-all duration-500 ${color}`}
+                    style={{ width: `${percentage}%` }}
+                />
+            </div>
+        );
+    };
+
+    const maxRoas = Math.max(...sortedData.map(d => d.spend > 0 ? d.purchaseValue / d.spend : 0));
+    const maxSpend = Math.max(...sortedData.map(d => d.spend));
+
+    return (
+        <Modal isOpen={isOpen} onClose={onClose}>
+            <div className="bg-brand-surface rounded-xl shadow-2xl w-full max-w-4xl max-h-[85vh] flex flex-col relative animate-fade-in">
+                
+                {/* Header */}
+                <div className={`${config.color} p-6 rounded-t-xl border-b border-brand-border/20`}>
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-4">
+                            <div className="text-3xl">{config.icon}</div>
+                            <div>
+                                <h3 className="text-xl font-bold text-brand-text">{config.title}</h3>
+                                <p className="text-brand-text-secondary text-sm">{data.length} grupos demográficos</p>
+                            </div>
+                        </div>
+                        <button 
+                            onClick={onClose}
+                            className="text-brand-text-secondary hover:text-brand-text transition-colors p-2 hover:bg-brand-bg/20 rounded-lg"
+                        >
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+
+                <div className="overflow-y-auto flex-1 p-6">
+                    
+                    {/* Resumen de métricas */}
+                    <div className="mb-6">
+                        <h4 className="text-lg font-semibold text-brand-text mb-4 flex items-center gap-2">
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                            </svg>
+                            Resumen Global
+                        </h4>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <MetricCard label="ROAS" value={summaryMetrics.roas.toFixed(2)} accent />
+                            <MetricCard label="CTR" value={`${summaryMetrics.ctr.toFixed(2)}%`} />
+                            <MetricCard label="CPA" value={summaryMetrics.cpa.toLocaleString('es-ES', { style: 'currency', currency })} />
+                            <MetricCard label="CPM" value={summaryMetrics.cpm.toLocaleString('es-ES', { style: 'currency', currency })} />
+                        </div>
+                    </div>
+
+                    {/* Detalle por grupo etario */}
+                    <div>
+                        <h4 className="text-lg font-semibold text-brand-text mb-4 flex items-center gap-2">
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                            </svg>
+                            Desglose por Edad
+                        </h4>
+                        
+                        <div className="space-y-4">
+                            {sortedData.map((demo, index) => {
+                                const roas = demo.spend > 0 ? demo.purchaseValue / demo.spend : 0;
+                                const cpa = demo.purchases > 0 ? demo.spend / demo.purchases : 0;
+                                const cpm = demo.impressions > 0 ? (demo.spend / demo.impressions) * 1000 : 0;
+                                const ctr = demo.impressions > 0 ? (demo.linkClicks / demo.impressions) * 100 : 0;
+                                const frequency = 1; // Placeholder
+
+                                return (
+                                    <div key={index} className="bg-brand-bg/30 rounded-xl p-5 border border-brand-border/20 hover:border-brand-border/40 transition-all">
+                                        
+                                        {/* Header del grupo etario */}
+                                        <div className="flex items-center justify-between mb-4">
+                                            <div className="flex items-center gap-3">
+                                                <div className={`${config.color} rounded-full px-3 py-1 text-sm font-bold`}>
+                                                    #{index + 1}
+                                                </div>
+                                                <div>
+                                                    <h5 className="font-bold text-brand-text text-lg">{demo.ageRange}</h5>
+                                                    <p className="text-brand-text-secondary text-sm">{demo.purchases} compras</p>
+                                                </div>
+                                            </div>
+                                            <div className="text-right">
+                                                <div className="text-sm text-brand-text-secondary">Gasto</div>
+                                                <div className="font-bold text-brand-text">{demo.spend.toLocaleString('es-ES', { style: 'currency', currency })}</div>
+                                            </div>
+                                        </div>
+
+                                        {/* Métricas con barras de progreso */}
+                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+                                            
+                                            <div className="space-y-2">
+                                                <div className="flex justify-between items-center">
+                                                    <span className="text-xs text-brand-text-secondary font-medium">ROAS</span>
+                                                    <span className="text-sm font-bold text-brand-text">{roas.toFixed(2)}</span>
+                                                </div>
+                                                <ProgressBar value={roas} max={maxRoas} color="bg-gradient-to-r from-green-500 to-emerald-500" />
+                                            </div>
+
+                                            <div className="space-y-2">
+                                                <div className="flex justify-between items-center">
+                                                    <span className="text-xs text-brand-text-secondary font-medium">CPA</span>
+                                                    <span className="text-sm font-bold text-brand-text">{cpa.toLocaleString('es-ES', { style: 'currency', currency, maximumFractionDigits: 0 })}</span>
+                                                </div>
+                                                <ProgressBar value={demo.spend} max={maxSpend} color="bg-gradient-to-r from-blue-500 to-cyan-500" />
+                                            </div>
+
+                                            <div className="space-y-2">
+                                                <div className="flex justify-between items-center">
+                                                    <span className="text-xs text-brand-text-secondary font-medium">CPM</span>
+                                                    <span className="text-sm font-bold text-brand-text">{cpm.toLocaleString('es-ES', { style: 'currency', currency, maximumFractionDigits: 0 })}</span>
+                                                </div>
+                                                <ProgressBar value={demo.spend} max={maxSpend} color="bg-gradient-to-r from-purple-500 to-violet-500" />
+                                            </div>
+
+                                            <div className="space-y-2">
+                                                <div className="flex justify-between items-center">
+                                                    <span className="text-xs text-brand-text-secondary font-medium">CTR</span>
+                                                    <span className="text-sm font-bold text-brand-text">{ctr.toFixed(2)}%</span>
+                                                </div>
+                                                <ProgressBar value={ctr} max={10} color="bg-gradient-to-r from-orange-500 to-red-500" />
+                                            </div>
+
+                                            <div className="space-y-2">
+                                                <div className="flex justify-between items-center">
+                                                    <span className="text-xs text-brand-text-secondary font-medium">Compras</span>
+                                                    <span className="text-sm font-bold text-brand-text">{demo.purchases}</span>
+                                                </div>
+                                                <ProgressBar value={demo.purchases} max={Math.max(...sortedData.map(d => d.purchases))} color="bg-gradient-to-r from-pink-500 to-rose-500" />
+                                            </div>
+
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </Modal>
     );
 };
