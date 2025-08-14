@@ -7,6 +7,7 @@ import { ClientSelectorModal } from './ClientSelectorModal';
 import { ImportHistory } from './ImportHistory';
 import { processPerformanceData, processLookerData } from '../lib/dataProcessor';
 import { mcpConnector } from '../lib/mcpConnector';
+import { dimensionalManager, DimensionalStatus } from '../database/dimensional_manager';
 
 const getFileHash = async (file: File): Promise<string> => {
     const buffer = await file.arrayBuffer();
@@ -77,6 +78,7 @@ export const ImportView: React.FC<ImportViewProps> = ({
     const [sqlConnected, setSqlConnected] = useState<boolean | null>(null);
     const [backendConnected, setBackendConnected] = useState<boolean | null>(null);
     const [importLogs, setImportLogs] = useState<string[]>([]);
+    const [dimensionalReady, setDimensionalReady] = useState(false);
     const addLog = (msg: string) => {
         setImportLogs(logs => [...logs, `[${new Date().toLocaleTimeString()}] ${msg}`]);
     };
@@ -92,9 +94,25 @@ export const ImportView: React.FC<ImportViewProps> = ({
                 const res = await fetch(`http://localhost:${backendPort}/api/sql/status`);
                 const data = await res.json();
                 setSqlConnected(Boolean(data.connected));
+                
+                // Check dimensional system status
+                try {
+                    Logger.info('[ImportView] Checking dimensional system...');
+                    await dimensionalManager.initializeFromServer();
+                    const isReady = dimensionalManager.isReady();
+                    const status = dimensionalManager.getStatus();
+                    const config = dimensionalManager.getConfig();
+                    
+                    Logger.info(`[ImportView] Dimensional status: ${status}, Ready: ${isReady}, Config: ${JSON.stringify(config)}`);
+                    setDimensionalReady(isReady);
+                } catch (error) {
+                    Logger.error('[ImportView] Error checking dimensional system:', error);
+                    setDimensionalReady(false);
+                }
             } catch {
                 setBackendConnected(false);
                 setSqlConnected(false);
+                setDimensionalReady(false);
             }
         };
         checkStatus();
@@ -491,7 +509,24 @@ export const ImportView: React.FC<ImportViewProps> = ({
                 await processAndSaveLookerData(file, safeClients);
             } else {
                 if (importMode === 'sql') {
-                    await importExcelToSQL(file, true); // Always allow client creation
+                    // Check if dimensional system is available and ready
+                    if (dimensionalReady && dimensionalManager.isReady()) {
+                        addLog('Using high-performance dimensional system...');
+                        try {
+                            const result = await dimensionalManager.processExcelFile(file);
+                            addLog(`Dimensional ETL completed: ${result.stats.recordsSuccess} records processed`);
+                            setFeedback({ 
+                                type: result.stats.recordsFailed > 0 ? 'info' : 'success', 
+                                message: `ETL dimensional completado: ${result.stats.recordsSuccess} registros procesados${result.stats.recordsFailed > 0 ? `, ${result.stats.recordsFailed} errores` : ''}. Duración: ${Math.round((result.duration || 0) / 1000)}s` 
+                            });
+                        } catch (dimensionalError) {
+                            addLog(`Dimensional system failed, falling back to standard SQL import: ${dimensionalError.message}`);
+                            await importExcelToSQL(file, true);
+                        }
+                    } else {
+                        addLog('Dimensional system not ready, using standard SQL import...');
+                        await importExcelToSQL(file, true); // Always allow client creation
+                    }
                 } else {
                     const checkResult = await processPerformanceData(file, safeClients, safePerformanceData, source, true);
                     if ('newAccountNames' in checkResult && checkResult.newAccountNames.length > 0) {
@@ -606,7 +641,119 @@ export const ImportView: React.FC<ImportViewProps> = ({
                             {sqlConnected ? 'SQL conectado' : sqlConnected === false ? 'SQL desconectado' : 'Verificando SQL...'}
                         </span>
                     </div>
+                    {importMode === 'sql' && (
+                        <div className="flex items-center gap-2">
+                            <span className={`w-3 h-3 rounded-full ${dimensionalReady ? 'bg-blue-500' : 'bg-yellow-500'}`}></span>
+                            <span className="text-brand-text">
+                                {dimensionalReady ? 'Sistema dimensional listo' : 'Sistema dimensional no disponible'}
+                            </span>
+                            {dimensionalReady && (
+                                <span className="text-xs bg-blue-500/20 text-blue-400 px-2 py-1 rounded-full font-medium">
+                                    ALTA PERFORMANCE
+                                </span>
+                            )}
+                        </div>
+                    )}
                 </div>
+
+                {/* Dimensional System Management */}
+                {importMode === 'sql' && sqlConnected && !dimensionalReady && (
+                    <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-4 mb-4">
+                        <div className="flex items-center gap-3 mb-3">
+                            <svg className="w-5 h-5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.732-.833-2.5 0L4.268 15.5c-.77.833.192 2.5 1.732 2.5z" />
+                            </svg>
+                            <h3 className="text-amber-300 font-semibold">Sistema Dimensional No Inicializado</h3>
+                        </div>
+                        <p className="text-brand-text-secondary text-sm mb-4">
+                            El sistema dimensional de alta performance no está disponible. Inicialízalo para obtener velocidades de procesamiento superiores y capacidades analíticas avanzadas.
+                        </p>
+                        <div className="flex gap-2">
+                            <button
+                                onClick={async () => {
+                                    setIsProcessing(true);
+                                    setFeedback({ type: 'info', message: 'Inicializando sistema dimensional...' });
+                                    try {
+                                        await dimensionalManager.createDimensionalTables();
+                                        await dimensionalManager.initializeFromServer();
+                                        setDimensionalReady(dimensionalManager.isReady());
+                                        setFeedback({ type: 'success', message: 'Sistema dimensional inicializado correctamente' });
+                                    } catch (error) {
+                                        const message = error instanceof Error ? error.message : 'Error inesperado';
+                                        setFeedback({ type: 'error', message: `Error al inicializar: ${message}` });
+                                    } finally {
+                                        setIsProcessing(false);
+                                    }
+                                }}
+                                disabled={isProcessing}
+                                className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                {isProcessing ? 'Inicializando...' : 'Inicializar Sistema Dimensional'}
+                            </button>
+                            <button
+                                onClick={() => setFeedback({ 
+                                    type: 'info', 
+                                    message: 'El sistema dimensional mejora la velocidad de procesamiento hasta 10x y habilita consultas analíticas avanzadas. Es seguro inicializarlo - no afecta los datos existentes.' 
+                                })}
+                                className="bg-brand-border hover:bg-brand-border/70 text-brand-text font-bold py-2 px-4 rounded-lg transition-colors"
+                            >
+                                ¿Qué es esto?
+                            </button>
+                        </div>
+                    </div>
+                )}
+
+                {/* Dimensional System Management for Advanced Users */}
+                {importMode === 'sql' && sqlConnected && dimensionalReady && (
+                    <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4 mb-4">
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                                <svg className="w-5 h-5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                                <div>
+                                    <h3 className="text-blue-300 font-semibold">Sistema Dimensional Activo</h3>
+                                    <p className="text-brand-text-secondary text-xs">Procesamiento de alta performance habilitado</p>
+                                </div>
+                            </div>
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={async () => {
+                                        const stats = await dimensionalManager.getSystemStats();
+                                        setFeedback({ 
+                                            type: 'info', 
+                                            message: `Estadísticas: ${stats?.factRecords || 0} registros de hechos, ${stats?.accounts || 0} cuentas, ${stats?.campaigns || 0} campañas activas` 
+                                        });
+                                    }}
+                                    className="bg-brand-border hover:bg-brand-border/70 text-brand-text text-xs px-3 py-1 rounded transition-colors"
+                                >
+                                    Ver Stats
+                                </button>
+                                <button
+                                    onClick={async () => {
+                                        if (confirm('¿Estás seguro? Esto eliminará todas las tablas dimensionales pero mantendrá tus datos originales.')) {
+                                            setIsProcessing(true);
+                                            try {
+                                                await dimensionalManager.dropDimensionalTables();
+                                                setDimensionalReady(false);
+                                                setFeedback({ type: 'success', message: 'Sistema dimensional eliminado correctamente' });
+                                            } catch (error) {
+                                                const message = error instanceof Error ? error.message : 'Error inesperado';
+                                                setFeedback({ type: 'error', message: `Error: ${message}` });
+                                            } finally {
+                                                setIsProcessing(false);
+                                            }
+                                        }
+                                    }}
+                                    disabled={isProcessing}
+                                    className="bg-red-600/20 hover:bg-red-600/30 text-red-400 text-xs px-3 py-1 rounded transition-colors disabled:opacity-50"
+                                >
+                                    Eliminar
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
 
                 {/* Switch Local/SQL */}
                 <div className="flex items-center gap-4 mb-4">
