@@ -85,10 +85,27 @@ export async function getClients(ds: DataSource): Promise<Client[]> {
 export async function getPerformance(ds: DataSource): Promise<Record<string, PerformanceRecord[]>> {
   Logger.info('[FETCH]', { ds, resource: 'performance' });
   if (ds === DataSource.LOCAL) {
+    // Check if we have SQL Server connection for detailed data
+    try {
+      const statusRes = await fetch('/api/sql/status');
+      const status = await statusRes.json();
+      
+      if (status.connected) {
+        Logger.info('[FETCH] Using SQL Server detailed performance data');
+        const data = await fetchJson('/api/sql/performance-details');
+        return normalizePerformance(data);
+      }
+    } catch (error) {
+      Logger.warn('[FETCH] SQL Server not available, falling back to local data:', error);
+    }
+    
+    // Fallback to local data
     const raw = await localServerClient.loadPerformanceData().catch(() => ({}));
     return normalizePerformance(raw);
   }
-  const data = await fetchJson('/api/sql/performance');
+  
+  // For SQL data source, use detailed endpoint
+  const data = await fetchJson('/api/sql/performance-details');
   return normalizePerformance(data);
 }
 

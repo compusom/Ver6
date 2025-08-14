@@ -22,7 +22,12 @@
       "Bash(pkill:*)",
       "Bash(node:*)",
       "Bash(del test-duplicates.js)",
-      "Bash(del:*)"
+      "Bash(del:*)",
+      "Bash(sqlite3:*)",
+      "Bash(mkdir:*)",
+      "Bash(copy databasedimensional_integration.sql publicdatabasedimensional_integration.sql)",
+      "Bash(cp:*)",
+      "Bash(npm run build:*)"
     ],
     "deny": [],
     "ask": []

@@ -4,6 +4,7 @@ import { notify } from './notificationService';
 import { MetaApiConfig } from '../types';
 import Logger from '../Logger';
 import { MCPConfigView } from './MCPConfigView';
+import { dimensionalManager, DimensionalStatus } from '../database/dimensional_manager';
 
 interface SettingsViewProps {
     metaApiConfig: MetaApiConfig | null;
@@ -14,13 +15,26 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ metaApiConfig, setMe
     const [config, setConfig] = useState<MetaApiConfig>({ appId: '', appSecret: '', accessToken: '' });
     const [testing, setTesting] = useState(false);
     const [lastTestResult, setLastTestResult] = useState<boolean | null>(null);
-    const [activeTab, setActiveTab] = useState<'meta' | 'mcp'>('meta');
+    const [activeTab, setActiveTab] = useState<'meta' | 'mcp' | 'dimensional'>('meta');
+    const [dimensionalStatus, setDimensionalStatus] = useState<DimensionalStatus>(DimensionalStatus.NOT_INITIALIZED);
 
     useEffect(() => {
         if (metaApiConfig) {
             setConfig(metaApiConfig);
             setLastTestResult(true);
         }
+        
+        // Check dimensional status
+        const checkDimensional = async () => {
+            try {
+                await dimensionalManager.initialize();
+                setDimensionalStatus(dimensionalManager.getStatus());
+            } catch (error) {
+                Logger.error('Failed to check dimensional status:', error);
+            }
+        };
+        
+        checkDimensional();
     }, [metaApiConfig]);
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -82,6 +96,24 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ metaApiConfig, setMe
                             Servidor MCP
                         </span>
                     </button>
+                    <button
+                        onClick={() => setActiveTab('dimensional')}
+                        className={`flex-1 py-3 px-4 text-sm font-medium rounded-lg transition-colors ${
+                            activeTab === 'dimensional'
+                                ? 'bg-brand-primary text-white shadow-md'
+                                : 'text-brand-text-secondary hover:text-brand-text hover:bg-brand-bg/50'
+                        }`}
+                    >
+                        <span className="flex items-center justify-center gap-2">
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                            </svg>
+                            Data Warehouse
+                            {dimensionalStatus === DimensionalStatus.READY && (
+                                <span className="w-2 h-2 bg-green-400 rounded-full"></span>
+                            )}
+                        </span>
+                    </button>
                 </div>
             </div>
 
@@ -121,6 +153,77 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ metaApiConfig, setMe
 
             {activeTab === 'mcp' && (
                 <MCPConfigView />
+            )}
+
+            {activeTab === 'dimensional' && (
+                <div className="bg-brand-surface rounded-lg p-8 shadow-lg">
+                    <h2 className="text-2xl font-bold text-brand-text mb-6">Sistema Dimensional (Data Warehouse)</h2>
+                    <p className="text-brand-text-secondary mb-6">
+                        El sistema dimensional proporciona un modelo de datos optimizado para análisis avanzados de Meta Ads.
+                        Incluye dimensiones SCD Tipo 2, métricas calculadas y vistas de compatibilidad.
+                        <br/><br/>
+                        <strong>Estado actual:</strong> 
+                        <span className={`ml-2 font-bold ${
+                            dimensionalStatus === DimensionalStatus.READY ? 'text-green-400' : 
+                            dimensionalStatus === DimensionalStatus.ERROR ? 'text-red-400' : 
+                            'text-yellow-400'
+                        }`}>
+                            {dimensionalStatus.replace('_', ' ').toUpperCase()}
+                        </span>
+                    </p>
+                    
+                    <div className="space-y-6">
+                        <div className="bg-brand-bg p-4 rounded-lg">
+                            <h3 className="text-lg font-bold text-brand-text mb-3">Características del Sistema</h3>
+                            <ul className="space-y-2 text-sm text-brand-text-secondary">
+                                <li className="flex items-center gap-2">
+                                    <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                    </svg>
+                                    <strong>Modelo Dimensional Star Schema:</strong> Optimizado para consultas analíticas rápidas
+                                </li>
+                                <li className="flex items-center gap-2">
+                                    <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                    </svg>
+                                    <strong>SCD Tipo 2:</strong> Seguimiento histórico de cambios en campañas, adsets y anuncios
+                                </li>
+                                <li className="flex items-center gap-2">
+                                    <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                    </svg>
+                                    <strong>ETL Automático:</strong> Procesamiento de archivos Excel de Meta con validación de datos
+                                </li>
+                                <li className="flex items-center gap-2">
+                                    <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                    </svg>
+                                    <strong>Compatibilidad:</strong> Vistas que mantienen la API existente para una transición fluida
+                                </li>
+                                <li className="flex items-center gap-2">
+                                    <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                    </svg>
+                                    <strong>Métricas Avanzadas:</strong> KPIs calculados automáticamente (ROAS, CPA, CTR, etc.)
+                                </li>
+                            </ul>
+                        </div>
+                        
+                        <div className="bg-brand-bg p-4 rounded-lg">
+                            <h3 className="text-lg font-bold text-brand-text mb-3">Gestión del Sistema</h3>
+                            <p className="text-sm text-brand-text-secondary mb-4">
+                                Para crear, eliminar o gestionar las tablas dimensionales, utiliza el Panel de Control.
+                                El sistema dimensional requiere ser activado desde allí antes de poder utilizarse.
+                            </p>
+                            <div className="flex items-center gap-2 text-blue-400 text-sm">
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                                Ve al Panel de Control para activar o configurar el sistema dimensional
+                            </div>
+                        </div>
+                    </div>
+                </div>
             )}
         </div>
     );

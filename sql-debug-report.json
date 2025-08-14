@@ -1,44 +1,44 @@
 {
   "session": {
-    "startTime": "2025-08-13T00:24:19.215Z",
-    "endTime": "2025-08-13T00:24:19.402Z",
-    "duration": 187
+    "startTime": "2025-08-14T12:33:47.241Z",
+    "endTime": "2025-08-14T12:33:47.557Z",
+    "duration": 316
   },
   "summary": {
     "totalLogs": 26,
     "errors": 0,
     "warnings": 0,
     "sqlQueries": 0,
-    "duration": 187,
+    "duration": 316,
     "logFile": "C:\\Users\\compu\\OneDrive\\Documentos\\GitHub\\Ver6\\sql-debug.log"
   },
   "logs": [
     {
-      "timestamp": "2025-08-13T00:24:19.218Z",
+      "timestamp": "2025-08-14T12:33:47.242Z",
       "level": "INFO",
       "category": "CONNECTION",
       "message": "Starting SQL Server connection attempt",
       "data": "{\n  \"server\": \"192.168.1.234\",\n  \"port\": \"1433\",\n  \"database\": \"MiAppDB\",\n  \"user\": \"MiAppUser\",\n  \"passwordProvided\": true\n}",
-      "elapsedMs": 3
+      "elapsedMs": 1
     },
     {
-      "timestamp": "2025-08-13T00:24:19.218Z",
+      "timestamp": "2025-08-14T12:33:47.242Z",
       "level": "DEBUG",
       "category": "VALIDATION",
       "message": "Parameter validation details",
       "data": "{\n  \"serverType\": \"string\",\n  \"serverValid\": true,\n  \"portType\": \"string\",\n  \"portIsValid\": true,\n  \"portNumber\": 1433,\n  \"portInRange\": true,\n  \"databaseType\": \"string\",\n  \"databaseValid\": true,\n  \"userType\": \"string\",\n  \"userValid\": true,\n  \"passwordType\": \"string\",\n  \"passwordValid\": true\n}",
-      "elapsedMs": 3
+      "elapsedMs": 1
     },
     {
-      "timestamp": "2025-08-13T00:24:19.326Z",
+      "timestamp": "2025-08-14T12:33:47.478Z",
       "level": "INFO",
       "category": "SCHEMA",
       "message": "Skipping automatic schema setup to avoid constraint errors",
       "data": null,
-      "elapsedMs": 111
+      "elapsedMs": 237
     },
     {
-      "timestamp": "2025-08-13T00:24:19.328Z",
+      "timestamp": "2025-08-14T12:33:47.479Z",
       "level": "INFO",
       "category": "[SQL][Schema] Tables to create in order:",
       "message": [
@@ -54,150 +54,150 @@
         "import_history"
       ],
       "data": null,
-      "elapsedMs": 113
+      "elapsedMs": 238
     },
     {
-      "timestamp": "2025-08-13T00:24:19.329Z",
+      "timestamp": "2025-08-14T12:33:47.480Z",
       "level": "INFO",
       "category": "[SQL][Schema] Processing table: clients",
       "data": null,
-      "elapsedMs": 114
+      "elapsedMs": 239
     },
     {
-      "timestamp": "2025-08-13T00:24:19.336Z",
+      "timestamp": "2025-08-14T12:33:47.502Z",
       "level": "INFO",
       "category": "[SQL][Schema] Table clients already exists",
       "data": null,
-      "elapsedMs": 121
+      "elapsedMs": 261
     },
     {
-      "timestamp": "2025-08-13T00:24:19.336Z",
+      "timestamp": "2025-08-14T12:33:47.503Z",
       "level": "INFO",
       "category": "[SQL][Schema] Processing table: ads",
       "data": null,
-      "elapsedMs": 121
+      "elapsedMs": 262
     },
     {
-      "timestamp": "2025-08-13T00:24:19.341Z",
+      "timestamp": "2025-08-14T12:33:47.508Z",
       "level": "INFO",
       "category": "[SQL][Schema] Table ads already exists",
       "data": null,
-      "elapsedMs": 126
+      "elapsedMs": 267
     },
     {
-      "timestamp": "2025-08-13T00:24:19.342Z",
+      "timestamp": "2025-08-14T12:33:47.508Z",
       "level": "INFO",
       "category": "[SQL][Schema] Processing table: facts_meta",
       "data": null,
-      "elapsedMs": 127
+      "elapsedMs": 267
     },
     {
-      "timestamp": "2025-08-13T00:24:19.347Z",
+      "timestamp": "2025-08-14T12:33:47.513Z",
       "level": "INFO",
       "category": "[SQL][Schema] Table facts_meta already exists",
       "data": null,
-      "elapsedMs": 132
+      "elapsedMs": 272
     },
     {
-      "timestamp": "2025-08-13T00:24:19.348Z",
+      "timestamp": "2025-08-14T12:33:47.513Z",
       "level": "INFO",
       "category": "[SQL][Schema] Processing table: archivos_reporte",
       "data": null,
-      "elapsedMs": 133
+      "elapsedMs": 272
     },
     {
-      "timestamp": "2025-08-13T00:24:19.353Z",
+      "timestamp": "2025-08-14T12:33:47.518Z",
       "level": "INFO",
       "category": "[SQL][Schema] Table archivos_reporte already exists",
       "data": null,
-      "elapsedMs": 138
+      "elapsedMs": 277
     },
     {
-      "timestamp": "2025-08-13T00:24:19.353Z",
+      "timestamp": "2025-08-14T12:33:47.519Z",
       "level": "INFO",
       "category": "[SQL][Schema] Processing table: metricas",
       "data": null,
-      "elapsedMs": 138
+      "elapsedMs": 278
     },
     {
-      "timestamp": "2025-08-13T00:24:19.358Z",
+      "timestamp": "2025-08-14T12:33:47.523Z",
       "level": "INFO",
       "category": "[SQL][Schema] Table metricas already exists",
       "data": null,
-      "elapsedMs": 143
+      "elapsedMs": 282
     },
     {
-      "timestamp": "2025-08-13T00:24:19.359Z",
+      "timestamp": "2025-08-14T12:33:47.524Z",
       "level": "INFO",
       "category": "[SQL][Schema] Processing table: archivos_url",
       "data": null,
-      "elapsedMs": 144
+      "elapsedMs": 283
     },
     {
-      "timestamp": "2025-08-13T00:24:19.363Z",
+      "timestamp": "2025-08-14T12:33:47.528Z",
       "level": "INFO",
       "category": "[SQL][Schema] Table archivos_url already exists",
       "data": null,
-      "elapsedMs": 148
+      "elapsedMs": 287
     },
     {
-      "timestamp": "2025-08-13T00:24:19.364Z",
+      "timestamp": "2025-08-14T12:33:47.529Z",
       "level": "INFO",
       "category": "[SQL][Schema] Processing table: vistas_preview",
       "data": null,
-      "elapsedMs": 149
+      "elapsedMs": 288
     },
     {
-      "timestamp": "2025-08-13T00:24:19.368Z",
+      "timestamp": "2025-08-14T12:33:47.533Z",
       "level": "INFO",
       "category": "[SQL][Schema] Table vistas_preview already exists",
       "data": null,
-      "elapsedMs": 153
+      "elapsedMs": 292
     },
     {
-      "timestamp": "2025-08-13T00:24:19.369Z",
+      "timestamp": "2025-08-14T12:33:47.533Z",
       "level": "INFO",
       "category": "[SQL][Schema] Processing table: processed_files_hashes",
       "data": null,
-      "elapsedMs": 154
+      "elapsedMs": 292
     },
     {
-      "timestamp": "2025-08-13T00:24:19.375Z",
+      "timestamp": "2025-08-14T12:33:47.538Z",
       "level": "INFO",
       "category": "[SQL][Schema] Table processed_files_hashes already exists",
       "data": null,
-      "elapsedMs": 160
+      "elapsedMs": 297
     },
     {
-      "timestamp": "2025-08-13T00:24:19.375Z",
+      "timestamp": "2025-08-14T12:33:47.538Z",
       "level": "INFO",
       "category": "[SQL][Schema] Processing table: _staging_facts",
       "data": null,
-      "elapsedMs": 160
+      "elapsedMs": 297
     },
     {
-      "timestamp": "2025-08-13T00:24:19.380Z",
+      "timestamp": "2025-08-14T12:33:47.543Z",
       "level": "INFO",
       "category": "[SQL][Schema] Table _staging_facts already exists",
       "data": null,
-      "elapsedMs": 165
+      "elapsedMs": 302
     },
     {
-      "timestamp": "2025-08-13T00:24:19.381Z",
+      "timestamp": "2025-08-14T12:33:47.543Z",
       "level": "INFO",
       "category": "[SQL][Schema] Processing table: import_history",
       "data": null,
-      "elapsedMs": 166
+      "elapsedMs": 302
     },
     {
-      "timestamp": "2025-08-13T00:24:19.387Z",
+      "timestamp": "2025-08-14T12:33:47.548Z",
       "level": "INFO",
       "category": "[SQL][Schema] Table import_history already exists",
       "data": null,
-      "elapsedMs": 172
+      "elapsedMs": 307
     },
     {
-      "timestamp": "2025-08-13T00:24:19.400Z",
+      "timestamp": "2025-08-14T12:33:47.556Z",
       "level": "INFO",
       "category": "[SQL][Schema] Final tables in database:",
       "message": [
@@ -214,15 +214,15 @@
         "vistas_preview"
       ],
       "data": null,
-      "elapsedMs": 185
+      "elapsedMs": 315
     },
     {
-      "timestamp": "2025-08-13T00:24:19.401Z",
+      "timestamp": "2025-08-14T12:33:47.557Z",
       "level": "SUCCESS",
       "category": "CONNECTION",
       "message": "SQL Server connection established successfully",
       "data": null,
-      "elapsedMs": 186
+      "elapsedMs": 316
     }
   ]
 }

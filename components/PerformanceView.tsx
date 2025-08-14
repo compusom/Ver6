@@ -11,6 +11,7 @@ import db from '../database';
 import Logger from '../Logger';
 import { MetricsDetailModal } from './MetricsDetailModal';
 import { DataSourceSwitch } from './DataSourceSwitch';
+import { dimensionalManager, DimensionalStatus } from '../database/dimensional_manager';
 
 type FilterMode = 'all' | 'image' | 'video';
 type DisplayMode = 'table' | 'cards';
@@ -128,6 +129,60 @@ export const PerformanceView: React.FC<PerformanceViewProps> = ({ clients, getPe
     const [filterMode, setFilterMode] = useState<FilterMode>('all');
     const [displayMode, setDisplayMode] = useState<DisplayMode>('cards');
     const [selectedClient, setSelectedClient] = useState<Client | null>(null);
+    const [dimensionalStatus, setDimensionalStatus] = useState<DimensionalStatus>(DimensionalStatus.NOT_INITIALIZED);
+    const [dimensionalData, setDimensionalData] = useState<any[]>([]);
+    const [useDimensional, setUseDimensional] = useState(false);
+    const [dimensionalClientSummaries, setDimensionalClientSummaries] = useState<Record<string, any>>({});
+
+    // Debug: Log whenever performanceData changes
+    useEffect(() => {
+        Logger.info('[PerformanceView] performanceData changed:', {
+            totalClients: Object.keys(safePerformanceData).length,
+            dataStructure: Object.keys(safePerformanceData).map(clientId => ({
+                clientId,
+                recordCount: Array.isArray(safePerformanceData[clientId]) ? safePerformanceData[clientId].length : 'not array',
+                firstRecord: Array.isArray(safePerformanceData[clientId]) && safePerformanceData[clientId].length > 0 ? safePerformanceData[clientId][0] : null
+            }))
+        });
+    }, [safePerformanceData]);
+
+    // Verificar estado del sistema dimensional
+    useEffect(() => {
+        const checkDimensional = async () => {
+            try {
+                await dimensionalManager.initialize();
+                const status = dimensionalManager.getStatus();
+                setDimensionalStatus(status);
+                
+                // Solo usar dimensional si está READY y tiene datos
+                let hasData = false;
+                if (status === DimensionalStatus.READY) {
+                    try {
+                        const stats = await dimensionalManager.getSystemStats();
+                        hasData = stats && stats.factRecords > 0;
+                        Logger.info('[PerformanceView] Sistema dimensional stats:', stats);
+                    } catch (error) {
+                        Logger.warn('[PerformanceView] Error getting dimensional stats:', error);
+                    }
+                }
+                
+                setUseDimensional(status === DimensionalStatus.READY && hasData);
+                
+                if (status === DimensionalStatus.READY && hasData) {
+                    Logger.info('[PerformanceView] Sistema dimensional disponible con datos');
+                } else if (status === DimensionalStatus.READY) {
+                    Logger.warn('[PerformanceView] Sistema dimensional sin datos, usando sistema tradicional');
+                } else {
+                    Logger.warn('[PerformanceView] Sistema dimensional no disponible, estado:', status);
+                }
+            } catch (error) {
+                Logger.error('[PerformanceView] Error checking dimensional system:', error);
+                setUseDimensional(false);
+            }
+        };
+        
+        checkDimensional();
+    }, []);
 
     useEffect(() => {
         if (selectedClient && !safeClients.some(c => c.id === selectedClient.id)) {
@@ -188,38 +243,137 @@ export const PerformanceView: React.FC<PerformanceViewProps> = ({ clients, getPe
 
     }, [selectedClient, safePerformanceData]);
 
-    const filteredPerformanceData = useMemo(() => {
-        const start = new Date(startDate);
-        start.setHours(0, 0, 0, 0);
-        const end = new Date(endDate);
-        end.setHours(23, 59, 59, 999);
+    // Cargar datos dimensionales cuando sea necesario
+    useEffect(() => {
+        const loadDimensionalData = async () => {
+            if (!useDimensional || !selectedClient) return;
+            
+            try {
+                Logger.info('[PerformanceView] Loading dimensional data for client:', selectedClient.name);
+                const filters = {
+                    startDate,
+                    endDate,
+                    accountName: selectedClient.name
+                };
+                
+                const data = await dimensionalManager.getPerformanceData(filters);
+                if (data) {
+                    setDimensionalData(data);
+                    Logger.success(`[PerformanceView] Loaded ${data.length} dimensional records`);
+                } else {
+                    setDimensionalData([]);
+                }
+            } catch (error) {
+                Logger.error('[PerformanceView] Error loading dimensional data:', error);
+                setDimensionalData([]);
+            }
+        };
         
+        loadDimensionalData();
+    }, [useDimensional, selectedClient, startDate, endDate]);
+
+    // Cargar resúmenes de clientes dimensionales solo si es necesario
+    useEffect(() => {
+        const loadDimensionalClientSummaries = async () => {
+            if (!useDimensional || safeClients.length === 0) {
+                Logger.info('[PerformanceView] Skipping dimensional summaries:', { useDimensional, clientsCount: safeClients.length });
+                // Limpiar summaries dimensionales si no los usamos
+                setDimensionalClientSummaries({});
+                return;
+            }
+            
+            Logger.info('[PerformanceView] Loading dimensional summaries for', safeClients.length, 'clients');
+            const summaries: Record<string, any> = {};
+            
+            for (const client of safeClients) {
+                try {
+                    const filters = {
+                        startDate,
+                        endDate,
+                        accountName: client.name
+                    };
+                    
+                    Logger.info(`[PerformanceView] Loading data for client ${client.name} with filters:`, filters);
+                    const data = await dimensionalManager.getPerformanceData(filters);
+                    Logger.info(`[PerformanceView] Got ${data?.length || 0} records for client ${client.name}`);
+                    
+                    if (!data || data.length === 0) {
+                        Logger.warn(`[PerformanceView] No data found for client ${client.name}`);
+                        summaries[client.id] = { ...client, gastoTotal: 0, roas: 0, totalAds: 0, matchedCount: 0 };
+                        continue;
+                    }
+                    
+                    // Agregar métricas desde datos dimensionales
+                    const gastoTotal = data.reduce((acc, row) => acc + (row.spend || 0), 0);
+                    const valorTotal = data.reduce((acc, row) => acc + (row.conversion_value || 0), 0);
+                    const roas = gastoTotal > 0 ? valorTotal / gastoTotal : 0;
+                    
+                    const uniqueAds = new Set(data.map(r => r.ad_name));
+                    const clientLookerData = lookerData[client.id] || {};
+                    const matchedCount = Array.from(uniqueAds).filter(adName => !!clientLookerData[adName]?.imageUrl).length;
+
+                    summaries[client.id] = { ...client, gastoTotal, roas, totalAds: uniqueAds.size, matchedCount };
+                    
+                } catch (error) {
+                    Logger.error(`[PerformanceView] Error loading summary for client ${client.name}:`, error);
+                    // En caso de error, desactivar dimensional y usar sistema tradicional
+                    setUseDimensional(false);
+                    setDimensionalClientSummaries({});
+                    return;
+                }
+            }
+            
+            setDimensionalClientSummaries(summaries);
+            Logger.info('[PerformanceView] Loaded dimensional client summaries for', Object.keys(summaries).length, 'clients');
+        };
+        
+        if (useDimensional) {
+            loadDimensionalClientSummaries();
+        } else {
+            setDimensionalClientSummaries({});
+        }
+    }, [useDimensional, safeClients, startDate, endDate, lookerData]);
+
+    const filteredPerformanceData = useMemo(() => {
+        Logger.info('[PerformanceView] NO FILTERS - Using all data globally');
+        
+        // SIN FILTROS - Usar todos los datos directamente
         const filtered: { [key: string]: PerformanceRecord[] } = {};
         for (const clientId in safePerformanceData) {
-            // Asegurar que safePerformanceData[clientId] es un array antes de usar filter
             const clientData = safePerformanceData[clientId];
             if (Array.isArray(clientData)) {
-                filtered[clientId] = clientData.filter(record => {
-                    const recordDate = parseDate(record.day);
-                    if (!recordDate) return false;
-                    return recordDate >= start && recordDate <= end;
-                });
+                // NO APLICAR FILTROS - usar todos los datos
+                filtered[clientId] = clientData;
+                Logger.info(`[PerformanceView] Client ${clientId}: ${clientData.length} total records (NO FILTERS)`);
+                
+                // Log muestra de datos para debug
+                if (clientData.length > 0) {
+                    Logger.info(`[PerformanceView] Sample data for client ${clientId}:`, clientData[0]);
+                }
             } else {
-                // Si no es un array, inicializar como array vacío
                 console.warn(`[PerformanceView] performanceData[${clientId}] is not an array:`, clientData);
                 filtered[clientId] = [];
             }
         }
         return filtered;
-    }, [safePerformanceData, startDate, endDate]);
+    }, [safePerformanceData]);
 
     const clientSummaries = useMemo(() => {
-        // Usar safeClients en lugar de clients
+        // Si el sistema dimensional está activo y tenemos resúmenes cargados, usarlos
+        if (useDimensional && Object.keys(dimensionalClientSummaries).length > 0) {
+            Logger.info('[PerformanceView] Using dimensional client summaries');
+            return safeClients.map(client => dimensionalClientSummaries[client.id] || { ...client, gastoTotal: 0, roas: 0, totalAds: 0, matchedCount: 0 });
+        }
+        
+        // Fallback al sistema tradicional (pero sin filtros restrictivos)
+        Logger.info('[PerformanceView] Using traditional data for client summaries');
         return safeClients.map(client => {
             const clientData = filteredPerformanceData[client.id];
             // Validar que clientData es un array
             const data = Array.isArray(clientData) ? clientData : [];
             const clientLookerData = lookerData[client.id] || {};
+            
+            Logger.info(`[PerformanceView] Processing client ${client.name} with ${data.length} records`);
             
             if (data.length === 0) {
                 return { ...client, gastoTotal: 0, roas: 0, totalAds: 0, matchedCount: 0 };
@@ -231,54 +385,89 @@ export const PerformanceView: React.FC<PerformanceViewProps> = ({ clients, getPe
             const uniqueAds = new Set(data.map(r => r.adName));
             const matchedCount = Array.from(uniqueAds).filter(adName => !!clientLookerData[adName]?.imageUrl).length;
 
-            return { ...client, gastoTotal, roas, totalAds: uniqueAds.size, matchedCount };
+            const summary = { ...client, gastoTotal, roas, totalAds: uniqueAds.size, matchedCount };
+            Logger.info(`[PerformanceView] Client ${client.name} summary:`, summary);
+            return summary;
         });
-    }, [safeClients, filteredPerformanceData, lookerData]);
+    }, [safeClients, filteredPerformanceData, lookerData, useDimensional, dimensionalClientSummaries]);
 
     const aggregatedClientData = useMemo<AggregatedAdPerformance[]>(() => {
         if (!selectedClient) return [];
         
+        Logger.info(`[PerformanceView] Loading aggregated data for client ${selectedClient.name}`);
+        
+        // Si usamos datos dimensionales, procesarlos de manera diferente
+        if (useDimensional && dimensionalData.length > 0) {
+            Logger.info('[PerformanceView] Using dimensional data for aggregated client data');
+            return processeDimensionalClientData(selectedClient, dimensionalData);
+        }
+        
+        // Fallback al sistema tradicional
         const allPerformanceDataForClient = performanceData[selectedClient.id] || [];
         const performanceDataForPeriod = filteredPerformanceData[selectedClient.id] || [];
-        const activePerformanceData = performanceDataForPeriod.filter(r => r.adDelivery?.toLowerCase() === 'active' && r.impressions > 0);
+        
+        Logger.info(`[PerformanceView] Traditional data - All: ${allPerformanceDataForClient.length}, Period: ${performanceDataForPeriod.length}`);
+        
+        // QUITAR TODOS LOS FILTROS - Mostrar absolutamente TODO
+        const activePerformanceData = performanceDataForPeriod; // SIN FILTROS
         const clientLookerData = lookerData[selectedClient.id] || {};
         
-        if (activePerformanceData.length === 0) return [];
+        Logger.info(`[PerformanceView] NO FILTERS - Using ALL data: ${activePerformanceData.length} records`);
+        
+        if (activePerformanceData.length === 0) {
+            Logger.warn('[PerformanceView] No active performance data found after filtering');
+            // Vamos a agregar más información para debug
+            if (performanceDataForPeriod.length > 0) {
+                Logger.info('[PerformanceView] Sample of available data:', performanceDataForPeriod.slice(0, 2));
+                const adsWithoutNames = performanceDataForPeriod.filter(r => !r.adName || r.adName.trim().length === 0);
+                Logger.warn(`[PerformanceView] Found ${adsWithoutNames.length} records without ad names`);
+            }
+            return [];
+        }
 
         const adsByName = activePerformanceData.reduce((acc, record) => {
-            if (!record.adName) return acc;
-            if (!acc[record.adName]) acc[record.adName] = [];
-            acc[record.adName].push(record);
+            // Permitir nombres de anuncios vacíos o nulos - asignar un nombre genérico
+            const adName = record.adName || `Sin_Nombre_${Math.random().toString(36).substr(2, 9)}`;
+            if (!acc[adName]) acc[adName] = [];
+            acc[adName].push(record);
             return acc;
         }, {} as Record<string, PerformanceRecord[]>);
+
+        Logger.info(`[PerformanceView] Grouped ads by name: ${Object.keys(adsByName).length} unique ads`);
+        Logger.info(`[PerformanceView] Ad names found:`, Object.keys(adsByName));
 
         const allAggregated = Object.entries(adsByName).map(([adName, records]) => {
             // Validar que records es un array
             const validRecords = Array.isArray(records) ? records : [];
             const totals = validRecords.reduce((acc, r) => {
-                acc.spend += r.spend;
-                acc.purchases += r.purchases;
-                acc.purchaseValue += r.purchaseValue;
-                acc.impressions += r.impressions;
-                acc.reach += r.reach;
-                acc.clicks += r.clicksAll;
-                acc.linkClicks += r.linkClicks;
-                acc.thruPlays += r.thruPlays;
-                acc.frequencyTotal += r.frequency * r.impressions;
-                acc.landingPageViews += r.landingPageViews;
-                acc.addsToCart += r.addsToCart;
-                acc.checkoutsInitiated += r.checkoutsInitiated;
-                acc.postInteractions += r.postInteractions;
-                acc.postReactions += r.postReactions;
-                acc.postComments += r.postComments;
-                acc.postShares += r.postShares;
-                acc.pageLikes += r.pageLikes;
-                acc.atencion += r.attention;
-                acc.interes += r.interest;
-                acc.deseo += r.desire;
-                if (r.videoAveragePlayTime > 0 && r.impressions > 0) {
-                    acc.videoAveragePlayTimeWeightedTotal += r.videoAveragePlayTime * r.impressions;
-                    acc.videoImpressions += r.impressions;
+                // Convertir a números para evitar problemas de suma
+                acc.spend += parseFloat(r.spend) || 0;
+                acc.purchases += parseInt(r.purchases) || 0;
+                acc.purchaseValue += parseFloat(r.purchaseValue) || 0;
+                acc.impressions += parseInt(r.impressions) || 0;
+                acc.reach += parseInt(r.reach) || 0;
+                acc.clicks += parseInt(r.clicksAll) || 0;
+                acc.linkClicks += parseInt(r.linkClicks) || 0;
+                acc.thruPlays += parseInt(r.thruPlays) || 0;
+                acc.frequencyTotal += (parseFloat(r.frequency) || 0) * (parseInt(r.impressions) || 0);
+                acc.landingPageViews += parseInt(r.landingPageViews) || 0;
+                acc.addsToCart += parseInt(r.addsToCart) || 0;
+                acc.checkoutsInitiated += parseInt(r.checkoutsInitiated) || 0;
+                acc.postInteractions += parseInt(r.postInteractions) || 0;
+                acc.postReactions += parseInt(r.postReactions) || 0;
+                acc.postComments += parseInt(r.postComments) || 0;
+                acc.postShares += parseInt(r.postShares) || 0;
+                acc.pageLikes += parseInt(r.pageLikes) || 0;
+                acc.atencion += parseInt(r.attention) || 0;
+                acc.interes += parseInt(r.interest) || 0;
+                acc.deseo += parseInt(r.desire) || 0;
+                
+                // Manejar tiempo de video promedio ponderado por impresiones
+                const videoTime = parseFloat(r.videoAveragePlayTime) || 0;
+                const impressions = parseInt(r.impressions) || 0;
+                if (videoTime > 0 && impressions > 0) {
+                    acc.videoAveragePlayTimeWeightedTotal += videoTime * impressions;
+                    acc.videoImpressions += impressions;
                 }
                 return acc;
             }, { 
@@ -305,17 +494,18 @@ export const PerformanceView: React.FC<PerformanceViewProps> = ({ clients, getPe
             const includedCustomAudiences = [...new Set(allRecordsForAd.flatMap(r => r.includedCustomAudiences?.split(',').map(s => s.trim()) || []).filter(Boolean))];
             const excludedCustomAudiences = [...new Set(allRecordsForAd.flatMap(r => r.excludedCustomAudiences?.split(',').map(s => s.trim()) || []).filter(Boolean))];
 
-            const roas = totals.spend > 0 ? totals.purchaseValue / totals.spend : 0;
-            const cpa = totals.purchases > 0 ? totals.spend / totals.purchases : 0;
-            const cpm = totals.impressions > 0 ? (totals.spend / totals.impressions) * 1000 : 0;
-            const ctr = totals.impressions > 0 ? (totals.clicks / totals.impressions) * 100 : 0;
-            const ctrLink = totals.impressions > 0 ? (totals.linkClicks / totals.impressions) * 100 : 0;
-            const frequency = totals.impressions > 0 ? totals.frequencyTotal / totals.impressions : 1;
-            const videoAveragePlayTime = totals.videoImpressions > 0 ? totals.videoAveragePlayTimeWeightedTotal / totals.videoImpressions : 0;
-            const ticketPromedio = totals.purchases > 0 ? totals.purchaseValue / totals.purchases : 0;
-            const cpc = totals.clicks > 0 ? totals.spend / totals.clicks : 0;
-            const tasaVisitaLP = totals.linkClicks > 0 ? (totals.landingPageViews / totals.linkClicks) * 100 : 0;
-            const tasaCompra = totals.landingPageViews > 0 ? (totals.purchases / totals.landingPageViews) * 100 : 0;
+            // Cálculos de métricas corregidos con redondeo apropiado
+            const roas = totals.spend > 0 ? Math.round((totals.purchaseValue / totals.spend) * 100) / 100 : 0;
+            const cpa = totals.purchases > 0 ? Math.round((totals.spend / totals.purchases) * 100) / 100 : 0;
+            const cpm = totals.impressions > 0 ? Math.round(((totals.spend / totals.impressions) * 1000) * 100) / 100 : 0;
+            const ctr = totals.impressions > 0 ? Math.round(((totals.clicks / totals.impressions) * 100) * 100) / 100 : 0;
+            const ctrLink = totals.impressions > 0 ? Math.round(((totals.linkClicks / totals.impressions) * 100) * 100) / 100 : 0;
+            const frequency = totals.impressions > 0 ? Math.round((totals.frequencyTotal / totals.impressions) * 100) / 100 : 1;
+            const videoAveragePlayTime = totals.videoImpressions > 0 ? Math.round((totals.videoAveragePlayTimeWeightedTotal / totals.videoImpressions) * 100) / 100 : 0;
+            const ticketPromedio = totals.purchases > 0 ? Math.round((totals.purchaseValue / totals.purchases) * 100) / 100 : 0;
+            const cpc = totals.clicks > 0 ? Math.round((totals.spend / totals.clicks) * 100) / 100 : 0;
+            const tasaVisitaLP = totals.linkClicks > 0 ? Math.round(((totals.landingPageViews / totals.linkClicks) * 100) * 100) / 100 : 0;
+            const tasaCompra = totals.landingPageViews > 0 ? Math.round(((totals.purchases / totals.landingPageViews) * 100) * 100) / 100 : 0;
             
             const lookerMatch = clientLookerData[adName];
             const inMultipleAdSets = new Set(validRecords.map(r => r.adSetName)).size > 1;
@@ -342,8 +532,143 @@ export const PerformanceView: React.FC<PerformanceViewProps> = ({ clients, getPe
             };
         }).sort((a,b) => b.roas - a.roas);
 
+        const finalResult = filterMode === 'all' ? allAggregated : allAggregated.filter(ad => ad.creativeType === filterMode);
+        Logger.info(`[PerformanceView] Final aggregated data: ${finalResult.length} ads for client ${selectedClient.name}`);
+        return finalResult;
+    }, [selectedClient, filteredPerformanceData, performanceData, lookerData, filterMode, uploadedVideos, useDimensional, dimensionalData]);
+
+    // Función para procesar datos dimensionales
+    const processeDimensionalClientData = (client: Client, dimData: any[]): AggregatedAdPerformance[] => {
+        const clientLookerData = lookerData[client.id] || {};
+        
+        if (dimData.length === 0) return [];
+
+        // Agrupar por nombre de anuncio
+        const adsByName = dimData.reduce((acc, record) => {
+            const adName = record.ad_name;
+            if (!adName) return acc;
+            if (!acc[adName]) acc[adName] = [];
+            acc[adName].push(record);
+            return acc;
+        }, {} as Record<string, any[]>);
+
+        const allAggregated = Object.entries(adsByName).map(([adName, records]) => {
+            const validRecords = Array.isArray(records) ? records : [];
+            const totals = validRecords.reduce((acc, r) => {
+                // Convertir a números para evitar problemas de suma (dimensional)
+                acc.spend += parseFloat(r.spend) || 0;
+                acc.purchases += parseInt(r.purchases) || 0;
+                acc.purchaseValue += parseFloat(r.conversion_value) || 0;
+                acc.impressions += parseInt(r.impressions) || 0;
+                acc.reach += parseInt(r.reach) || 0;
+                acc.clicks += parseInt(r.clicks_all) || 0;
+                acc.linkClicks += parseInt(r.link_clicks) || 0;
+                acc.thruPlays += parseInt(r.thruplays) || 0;
+                acc.frequencyTotal += (parseFloat(r.frequency) || 0) * (parseInt(r.impressions) || 0);
+                acc.landingPageViews += parseInt(r.landing_page_views) || 0;
+                acc.addsToCart += parseInt(r.add_to_cart) || 0;
+                acc.checkoutsInitiated += parseInt(r.initiate_checkout) || 0;
+                acc.postInteractions += parseInt(r.post_interactions) || 0;
+                acc.postReactions += parseInt(r.post_reactions) || 0;
+                acc.postComments += parseInt(r.post_comments) || 0;
+                acc.postShares += parseInt(r.post_shares) || 0;
+                acc.pageLikes += parseInt(r.page_likes) || 0;
+                acc.atencion += parseInt(r.atencion) || 0;
+                acc.interes += parseInt(r.interes) || 0;
+                acc.deseo += parseInt(r.deseo) || 0;
+                
+                // Manejar tiempo de video promedio ponderado por impresiones
+                const videoTime = parseFloat(r.avg_watch_time) || 0;
+                const impressions = parseInt(r.impressions) || 0;
+                if (videoTime > 0 && impressions > 0) {
+                    acc.videoAveragePlayTimeWeightedTotal += videoTime * impressions;
+                    acc.videoImpressions += impressions;
+                }
+                return acc;
+            }, { 
+                spend: 0, purchases: 0, purchaseValue: 0, impressions: 0, reach: 0, clicks: 0, 
+                linkClicks: 0, thruPlays: 0, videoAveragePlayTimeWeightedTotal: 0, videoImpressions: 0, 
+                frequencyTotal: 0, landingPageViews: 0, addsToCart: 0, checkoutsInitiated: 0, 
+                postInteractions: 0, postReactions: 0, postComments: 0, postShares: 0, pageLikes: 0,
+                atencion: 0, interes: 0, deseo: 0 
+            });
+
+            // Calcular métricas derivadas con redondeo apropiado (dimensional)
+            const roas = totals.spend > 0 ? Math.round((totals.purchaseValue / totals.spend) * 100) / 100 : 0;
+            const cpa = totals.purchases > 0 ? Math.round((totals.spend / totals.purchases) * 100) / 100 : 0;
+            const cpm = totals.impressions > 0 ? Math.round(((totals.spend / totals.impressions) * 1000) * 100) / 100 : 0;
+            const ctr = totals.impressions > 0 ? Math.round(((totals.clicks / totals.impressions) * 100) * 100) / 100 : 0;
+            const ctrLink = totals.impressions > 0 ? Math.round(((totals.linkClicks / totals.impressions) * 100) * 100) / 100 : 0;
+            const frequency = totals.impressions > 0 ? Math.round((totals.frequencyTotal / totals.impressions) * 100) / 100 : 1;
+            const videoAveragePlayTime = totals.videoImpressions > 0 ? Math.round((totals.videoAveragePlayTimeWeightedTotal / totals.videoImpressions) * 100) / 100 : 0;
+            const ticketPromedio = totals.purchases > 0 ? Math.round((totals.purchaseValue / totals.purchases) * 100) / 100 : 0;
+            const cpc = totals.clicks > 0 ? Math.round((totals.spend / totals.clicks) * 100) / 100 : 0;
+            const tasaVisitaLP = totals.linkClicks > 0 ? Math.round(((totals.landingPageViews / totals.linkClicks) * 100) * 100) / 100 : 0;
+            const tasaCompra = totals.landingPageViews > 0 ? Math.round(((totals.purchases / totals.landingPageViews) * 100) * 100) / 100 : 0;
+            
+            const lookerMatch = clientLookerData[adName];
+            const isVideo = totals.thruPlays > 0 || videoAveragePlayTime > 1;
+            const creativeType: 'image' | 'video' | undefined = isVideo ? 'video' : (lookerMatch?.imageUrl ? 'image' : undefined);
+            const isVideoUploaded = creativeType === 'video' ? uploadedVideos.some(v => v.clientId === client.id && v.adName === adName) : false;
+
+            // Obtener información adicional del primer registro
+            const firstRecord = validRecords[0] || {};
+            const adSetNames = [...new Set(validRecords.map(r => r.adset_name))];
+            const campaignNames = [...new Set(validRecords.map(r => r.campaign_name))];
+
+            return { 
+                adName, 
+                adSetNames, 
+                campaignNames, 
+                includedCustomAudiences: [], // TODO: implementar desde dimensional
+                excludedCustomAudiences: [], // TODO: implementar desde dimensional
+                spend: totals.spend, 
+                purchases: totals.purchases, 
+                purchaseValue: totals.purchaseValue, 
+                impressions: totals.impressions, 
+                clicks: totals.clicks, 
+                linkClicks: totals.linkClicks, 
+                roas, 
+                cpa, 
+                cpm, 
+                ctr, 
+                ctrLink, 
+                frequency, 
+                videoAveragePlayTime, 
+                thruPlays: totals.thruPlays, 
+                isMatched: !!lookerMatch, 
+                creativeDescription: lookerMatch?.creativeDescription, 
+                currency: client.currency, 
+                inMultipleAdSets: adSetNames.length > 1,
+                imageUrl: lookerMatch?.imageUrl, 
+                adPreviewLink: lookerMatch?.adPreviewLink, 
+                creativeType, 
+                analysisResult: lookerMatch?.analysisResult, 
+                videoFileName: firstRecord.video_filename || undefined, 
+                isVideoUploaded, 
+                ticketPromedio, 
+                alcance: totals.reach, 
+                cpc, 
+                visitasLP: totals.landingPageViews, 
+                tasaVisitaLP, 
+                tasaCompra, 
+                addsToCart: totals.addsToCart, 
+                checkoutsInitiated: totals.checkoutsInitiated, 
+                postInteractions: totals.postInteractions, 
+                postReactions: totals.postReactions, 
+                postComments: totals.postComments, 
+                postShares: totals.postShares, 
+                pageLikes: totals.pageLikes,
+                activeDays: new Set(validRecords.map(r => r.date)).size,
+                atencion: totals.atencion, 
+                interes: totals.interes, 
+                deseo: totals.deseo, 
+                demographics: [] 
+            };
+        }).sort((a,b) => b.roas - a.roas);
+
         return filterMode === 'all' ? allAggregated : allAggregated.filter(ad => ad.creativeType === filterMode);
-    }, [selectedClient, filteredPerformanceData, performanceData, lookerData, filterMode, uploadedVideos]);
+    };
     
     const hasLinkedAdsWithAnalysis = useMemo(() => aggregatedClientData.some(ad => ad.isMatched && ad.creativeDescription), [aggregatedClientData]);
     const adsToAnalyzeCount = useMemo(() => aggregatedClientData.filter(ad => ad.isMatched && ad.imageUrl && !ad.creativeDescription && (ad.creativeType === 'image' || (ad.creativeType === 'video' && ad.isVideoUploaded))).length, [aggregatedClientData]);
@@ -566,6 +891,22 @@ export const PerformanceView: React.FC<PerformanceViewProps> = ({ clients, getPe
                     </div>
                     <div className="flex items-center gap-4">
                         <DataSourceSwitch />
+                        {useDimensional && (
+                            <div className="flex items-center gap-1 bg-blue-500/20 text-blue-400 px-2 py-1 rounded text-xs font-bold">
+                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                                </svg>
+                                DW Activo
+                            </div>
+                        )}
+                        {dimensionalStatus === DimensionalStatus.READY && !useDimensional && (
+                            <div className="flex items-center gap-1 bg-yellow-500/20 text-yellow-400 px-2 py-1 rounded text-xs font-bold">
+                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                </svg>
+                                DW Sin Datos
+                            </div>
+                        )}
                         <DateRangePicker onDateChange={onDateChange} startDate={startDate} endDate={endDate} />
                     </div>
                 </header>

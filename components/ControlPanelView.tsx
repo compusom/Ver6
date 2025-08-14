@@ -3,6 +3,7 @@ import { notify } from './notificationService';
 import db from '../database';
 import Logger from '../Logger';
 import { SqlConnectionPanel } from './SqlConnectionPanel';
+import { dimensionalManager, DimensionalStatus } from '../database/dimensional_manager';
 
 type TableKey = 'clients' | 'users' | 'performance_data' | 'looker_data' | 'bitacora_reports' | 'uploaded_videos' | 'import_history' | 'processed_files_hashes';
 
@@ -42,6 +43,10 @@ export const ControlPanelView: React.FC = () => {
     const [sqlCommand, setSqlCommand] = useState('');
     const [sqlResult, setSqlResult] = useState<string>('');
     const [sqlLoading, setSqlLoading] = useState(false);
+    // Estado para el sistema dimensional
+    const [dimensionalStatus, setDimensionalStatus] = useState<DimensionalStatus>(DimensionalStatus.NOT_INITIALIZED);
+    const [dimensionalStats, setDimensionalStats] = useState<any>(null);
+    const [dimensionalLoading, setDimensionalLoading] = useState(false);
 
     // Ejecuta el comando SQL en el backend
     const handleRunSqlCommand = async () => {
@@ -99,9 +104,24 @@ export const ControlPanelView: React.FC = () => {
         setIsChecking(false);
     }, []);
 
+    const checkDimensionalStatus = useCallback(async () => {
+        try {
+            await dimensionalManager.initialize();
+            setDimensionalStatus(dimensionalManager.getStatus());
+            
+            if (dimensionalManager.isReady()) {
+                const stats = await dimensionalManager.getSystemStats();
+                setDimensionalStats(stats);
+            }
+        } catch (error) {
+            Logger.error('[CTRL] Failed to check dimensional status:', error);
+        }
+    }, []);
+
     useEffect(() => {
         checkTableStatus();
-    }, [checkTableStatus]);
+        checkDimensionalStatus();
+    }, [checkTableStatus, checkDimensionalStatus]);
 
 
     const handleClearDatabase = async () => {
@@ -115,7 +135,20 @@ export const ControlPanelView: React.FC = () => {
 
         try {
             addLog('☢️ Iniciando protocolo de limpieza de datos de la base de datos...');
+            
+            // Limpiar datos del sistema dimensional si está disponible
+            if (dimensionalManager.isReady()) {
+                addLog('🗂️ Limpiando datos del sistema dimensional...');
+                await dimensionalManager.dropDimensionalTables();
+                addLog('✅ Sistema dimensional limpiado.');
+            }
+            
+            // Limpiar datos del sistema tradicional
             await db.clearAllData();
+            
+            // Actualizar estado dimensional
+            await checkDimensionalStatus();
+            
             // Recargar hashes procesados en el frontend tras limpiar la base
             if (window.location.reload) {
                 window.location.reload();
@@ -179,6 +212,76 @@ export const ControlPanelView: React.FC = () => {
         }
     };
 
+    // Manejadores para el sistema dimensional
+    const handleCreateDimensionalTables = async () => {
+        if (!window.confirm('¿Crear las tablas del sistema dimensional? Esto creará todas las tablas necesarias para el análisis avanzado.')) {
+            return;
+        }
+        
+        setDimensionalLoading(true);
+        addLog('🏗️ Iniciando creación del sistema dimensional...');
+        
+        try {
+            await dimensionalManager.createDimensionalTables();
+            await checkDimensionalStatus();
+            addLog('✅ Sistema dimensional creado exitosamente.');
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            addLog(`❌ Error creando sistema dimensional: ${errorMessage}`);
+        } finally {
+            setDimensionalLoading(false);
+        }
+    };
+
+    const handleDropDimensionalTables = async () => {
+        if (!window.confirm('¿ELIMINAR todas las tablas del sistema dimensional? Esta acción eliminará todos los datos analíticos de forma permanente.')) {
+            return;
+        }
+        
+        if (!window.confirm('CONFIRMACIÓN FINAL: ¿Realmente quieres eliminar todo el sistema dimensional? Esta acción no se puede deshacer.')) {
+            return;
+        }
+        
+        setDimensionalLoading(true);
+        addLog('🗑️ Eliminando sistema dimensional...');
+        
+        try {
+            await dimensionalManager.dropDimensionalTables();
+            await checkDimensionalStatus();
+            addLog('✅ Sistema dimensional eliminado exitosamente.');
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            addLog(`❌ Error eliminando sistema dimensional: ${errorMessage}`);
+        } finally {
+            setDimensionalLoading(false);
+        }
+    };
+
+    const handleMigrateToDimensional = async () => {
+        if (dimensionalStatus !== DimensionalStatus.READY) {
+            notify('Sistema dimensional no está listo. Crear las tablas primero.', 'warning');
+            return;
+        }
+        
+        if (!window.confirm('¿Migrar datos existentes al sistema dimensional? Esto procesará todos los datos de performance existentes.')) {
+            return;
+        }
+        
+        setDimensionalLoading(true);
+        addLog('📦 Iniciando migración de datos existentes...');
+        
+        try {
+            await dimensionalManager.migrateExistingData();
+            await checkDimensionalStatus();
+            addLog('✅ Migración completada exitosamente.');
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            addLog(`❌ Error en migración: ${errorMessage}`);
+        } finally {
+            setDimensionalLoading(false);
+        }
+    };
+
     return (
         <div className="max-w-4xl mx-auto bg-brand-surface rounded-lg p-8 shadow-lg animate-fade-in space-y-8">
             {/* Selector de modo de base de datos */}
@@ -196,6 +299,14 @@ export const ControlPanelView: React.FC = () => {
                     <option value="sql">SQL Server</option>
                 </select>
                 <span className="text-xs text-brand-text-secondary">Selecciona el modo para pruebas y operaciones</span>
+                {dbMode === 'local' && dimensionalStatus === DimensionalStatus.READY && (
+                    <div className="flex items-center gap-1 bg-blue-500/20 text-blue-400 px-2 py-1 rounded text-xs font-bold">
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                        </svg>
+                        DW Activo
+                    </div>
+                )}
             </div>
             {/* Backend connection witness y panel de control solo en modo local */}
             {dbMode === 'local' && (
@@ -313,6 +424,114 @@ export const ControlPanelView: React.FC = () => {
                                    <p key={i} className={`whitespace-pre-wrap ${log.includes('✅') ? 'text-green-400' : log.includes('⚠️') ? 'text-yellow-400' : log.includes('❌') || log.includes('☢️') ? 'text-red-400' : ''}`}>{log}</p>
                                 ))}
                             </pre>
+                        </div>
+                    </div>
+                    {/* Panel de Sistema Dimensional */}
+                    <div className="border-t-2 border-blue-500/30 pt-6 space-y-4">
+                        <div className="flex items-center gap-2 mb-4">
+                            <svg className="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                            </svg>
+                            <h3 className="text-xl font-bold text-blue-400">Sistema Dimensional (Data Warehouse)</h3>
+                        </div>
+                        
+                        {/* Estado del sistema dimensional */}
+                        <div className="bg-blue-600/10 p-4 rounded-md space-y-3">
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <h4 className="font-semibold text-blue-400">Estado del Sistema</h4>
+                                    <p className="text-sm text-brand-text-secondary mt-1">
+                                        Sistema analítico avanzado con arquitectura dimensional para análisis de Meta Ads
+                                    </p>
+                                </div>
+                                <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-sm font-bold ${
+                                    dimensionalStatus === DimensionalStatus.READY ? 'bg-green-500/20 text-green-400' :
+                                    dimensionalStatus === DimensionalStatus.INITIALIZING ? 'bg-yellow-500/20 text-yellow-400' :
+                                    dimensionalStatus === DimensionalStatus.ERROR ? 'bg-red-500/20 text-red-400' :
+                                    'bg-gray-500/20 text-gray-400'
+                                }`}>
+                                    {dimensionalStatus === DimensionalStatus.READY && <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>}
+                                    {dimensionalStatus === DimensionalStatus.INITIALIZING && <svg className="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>}
+                                    {dimensionalStatus.replace('_', ' ').toUpperCase()}
+                                </div>
+                            </div>
+                            
+                            {/* Estadísticas del sistema */}
+                            {dimensionalStats && (
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
+                                    <div className="text-center">
+                                        <div className="text-lg font-bold text-brand-text">{dimensionalStats.accounts}</div>
+                                        <div className="text-xs text-brand-text-secondary">Cuentas</div>
+                                    </div>
+                                    <div className="text-center">
+                                        <div className="text-lg font-bold text-brand-text">{dimensionalStats.campaigns}</div>
+                                        <div className="text-xs text-brand-text-secondary">Campañas</div>
+                                    </div>
+                                    <div className="text-center">
+                                        <div className="text-lg font-bold text-brand-text">{dimensionalStats.ads}</div>
+                                        <div className="text-xs text-brand-text-secondary">Anuncios</div>
+                                    </div>
+                                    <div className="text-center">
+                                        <div className="text-lg font-bold text-brand-text">{dimensionalStats.factRecords}</div>
+                                        <div className="text-xs text-brand-text-secondary">Registros</div>
+                                    </div>
+                                </div>
+                            )}
+                            
+                            {/* Botones de acción */}
+                            <div className="flex flex-wrap gap-3 pt-4 border-t border-blue-500/20">
+                                {dimensionalStatus === DimensionalStatus.NOT_INITIALIZED ? (
+                                    <button
+                                        onClick={handleCreateDimensionalTables}
+                                        disabled={dimensionalLoading}
+                                        className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg shadow-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                                    >
+                                        {dimensionalLoading ? (
+                                            <svg className="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                            </svg>
+                                        ) : (
+                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                                            </svg>
+                                        )}
+                                        Crear Tablas Dimensionales
+                                    </button>
+                                ) : (
+                                    <>
+                                        <button
+                                            onClick={handleMigrateToDimensional}
+                                            disabled={dimensionalLoading}
+                                            className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg shadow-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                                        >
+                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" />
+                                            </svg>
+                                            Migrar Datos Existentes
+                                        </button>
+                                        <button
+                                            onClick={checkDimensionalStatus}
+                                            disabled={dimensionalLoading}
+                                            className="bg-brand-border hover:bg-brand-border/70 text-brand-text font-bold py-2 px-4 rounded-lg shadow-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                                        >
+                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                            </svg>
+                                            Actualizar Estado
+                                        </button>
+                                        <button
+                                            onClick={handleDropDimensionalTables}
+                                            disabled={dimensionalLoading}
+                                            className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg shadow-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                                        >
+                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                            </svg>
+                                            Eliminar Tablas
+                                        </button>
+                                    </>
+                                )}
+                            </div>
                         </div>
                     </div>
                     {/* Zona de peligro local */}
