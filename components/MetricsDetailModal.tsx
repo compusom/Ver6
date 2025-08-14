@@ -60,61 +60,162 @@ const InfoPill: React.FC<{ title: string; items: string[]; type: 'included' | 'e
 };
 
 const DemographicsCard: React.FC<{ demographics: DemographicData[] | undefined, currency: string }> = ({ demographics, currency }) => {
-    const topSegments = useMemo(() => {
+    const [selectedGender, setSelectedGender] = useState<string | null>(null);
+
+    const genderData = useMemo(() => {
         if (!demographics || demographics.length === 0) {
-            return [];
+            return { male: [], female: [], unknown: [] };
         }
 
-        const maxRoas = Math.max(...demographics.map(d => d.spend > 0 ? d.purchaseValue / d.spend : 0));
-        const maxSales = Math.max(...demographics.map(d => d.purchaseValue));
-        
-        const scoredDemographics = demographics.map(d => {
-            const roas = d.spend > 0 ? d.purchaseValue / d.spend : 0;
-            
-            const normalizedRoas = maxRoas > 0 ? roas / maxRoas : 0;
-            const normalizedSales = maxSales > 0 ? d.purchaseValue / maxSales : 0;
+        const grouped = demographics.reduce((acc, d) => {
+            const gender = d.gender.toLowerCase();
+            if (gender === 'male') acc.male.push(d);
+            else if (gender === 'female') acc.female.push(d);
+            else acc.unknown.push(d);
+            return acc;
+        }, { male: [] as DemographicData[], female: [] as DemographicData[], unknown: [] as DemographicData[] });
 
-            const score = (normalizedRoas * 0.5) + (normalizedSales * 0.5);
-            return { ...d, score, roas };
-        });
-
-        return scoredDemographics.sort((a, b) => b.score - a.score).slice(0, 3);
+        return grouped;
     }, [demographics]);
+
+    const calculateGenderMetrics = (genderGroup: DemographicData[]) => {
+        if (genderGroup.length === 0) return { roas: 0, ctr: 0, cpa: 0, spend: 0, purchaseValue: 0, purchases: 0, cpm: 0, frequency: 0 };
+
+        const totals = genderGroup.reduce((acc, d) => {
+            acc.spend += d.spend;
+            acc.purchaseValue += d.purchaseValue;
+            acc.purchases += d.purchases;
+            acc.impressions += d.impressions;
+            acc.linkClicks += d.linkClicks;
+            return acc;
+        }, { spend: 0, purchaseValue: 0, purchases: 0, impressions: 0, linkClicks: 0 });
+
+        return {
+            roas: totals.spend > 0 ? totals.purchaseValue / totals.spend : 0,
+            ctr: totals.impressions > 0 ? (totals.linkClicks / totals.impressions) * 100 : 0,
+            cpa: totals.purchases > 0 ? totals.spend / totals.purchases : 0,
+            spend: totals.spend,
+            purchaseValue: totals.purchaseValue,
+            purchases: totals.purchases,
+            cpm: totals.impressions > 0 ? (totals.spend / totals.impressions) * 1000 : 0,
+            frequency: 1 // Placeholder ya que no tenemos reach por demografía
+        };
+    };
+
+    const maleMetrics = calculateGenderMetrics(genderData.male);
+    const femaleMetrics = calculateGenderMetrics(genderData.female);
+    const unknownMetrics = calculateGenderMetrics(genderData.unknown);
 
     if (!demographics || demographics.length === 0) {
         return <MetricSubCard title="Rendimiento Demográfico"><p className="text-xs text-brand-text-secondary">No hay datos demográficos.</p></MetricSubCard>;
     }
 
-    const formatLabel = (data: DemographicData) => {
-        const gender = data.gender.toLowerCase() === 'female' ? 'Mujer' : data.gender.toLowerCase() === 'male' ? 'Hombre' : 'Otro';
-        return `${gender} ${data.ageRange}`;
+    const GenderButton: React.FC<{ gender: 'male' | 'female' | 'unknown', metrics: any, count: number }> = ({ gender, metrics, count }) => {
+        const labels = { male: 'Hombres', female: 'Mujeres', unknown: 'Otros' };
+        const isSelected = selectedGender === gender;
+        const hasData = count > 0;
+
+        return (
+            <button
+                onClick={() => setSelectedGender(isSelected ? null : gender)}
+                disabled={!hasData}
+                className={`p-3 rounded-lg border transition-all text-left ${
+                    !hasData 
+                        ? 'opacity-50 cursor-not-allowed border-brand-border/30' 
+                        : isSelected 
+                            ? 'bg-brand-primary/20 border-brand-primary' 
+                            : 'border-brand-border hover:border-brand-primary/50 hover:bg-brand-bg/50'
+                }`}
+            >
+                <div className="font-semibold text-brand-text mb-2">{labels[gender]} ({count})</div>
+                {hasData && (
+                    <div className="grid grid-cols-3 gap-2 text-xs">
+                        <div>
+                            <div className="text-brand-text-secondary">ROAS</div>
+                            <div className="font-bold text-brand-text">{metrics.roas.toFixed(2)}</div>
+                        </div>
+                        <div>
+                            <div className="text-brand-text-secondary">CTR</div>
+                            <div className="font-bold text-brand-text">{metrics.ctr.toFixed(2)}%</div>
+                        </div>
+                        <div>
+                            <div className="text-brand-text-secondary">CPA</div>
+                            <div className="font-bold text-brand-text">{metrics.cpa.toLocaleString('es-ES', { style: 'currency', currency })}</div>
+                        </div>
+                    </div>
+                )}
+            </button>
+        );
+    };
+
+    const getSelectedData = () => {
+        switch(selectedGender) {
+            case 'male': return genderData.male;
+            case 'female': return genderData.female;
+            case 'unknown': return genderData.unknown;
+            default: return [];
+        }
     };
 
     return (
         <MetricSubCard title="Rendimiento Demográfico">
-             <div className="grid grid-cols-1 gap-4">
-                {topSegments.length > 0 ? topSegments.map((segment, index) => (
-                    <div key={index} className="border-b border-brand-border/50 pb-3 last:border-b-0 last:pb-0">
-                        <p className="font-bold text-brand-text text-lg flex items-center gap-2">
-                            <span className="text-sm font-mono bg-brand-primary/20 text-brand-primary rounded-full h-6 w-6 flex items-center justify-center">{index + 1}</span>
-                            {formatLabel(segment)}
-                        </p>
-                        <div className="grid grid-cols-3 gap-2 mt-2 text-center">
-                            <div>
-                                <p className="text-xs text-brand-text-secondary">Ventas</p>
-                                <p className="text-sm font-semibold">{segment.purchaseValue.toLocaleString('es-ES', { style: 'currency', currency })}</p>
-                            </div>
-                            <div>
-                                <p className="text-xs text-brand-text-secondary">ROAS</p>
-                                <p className="text-sm font-semibold">{segment.roas.toFixed(2)}</p>
-                            </div>
-                            <div>
-                                <p className="text-xs text-brand-text-secondary">CTR</p>
-                                <p className="text-sm font-semibold">{`${(segment.impressions > 0 ? (segment.linkClicks / segment.impressions) * 100 : 0).toFixed(2)}%`}</p>
-                            </div>
+            <div className="space-y-4">
+                {/* Gender Buttons */}
+                <div className="grid grid-cols-1 gap-2">
+                    <GenderButton gender="male" metrics={maleMetrics} count={genderData.male.length} />
+                    <GenderButton gender="female" metrics={femaleMetrics} count={genderData.female.length} />
+                    <GenderButton gender="unknown" metrics={unknownMetrics} count={genderData.unknown.length} />
+                </div>
+
+                {/* Detailed View */}
+                {selectedGender && (
+                    <div className="border-t border-brand-border/50 pt-4">
+                        <h4 className="font-semibold text-brand-text mb-3">
+                            Detalle por Grupo Etario - {selectedGender === 'male' ? 'Hombres' : selectedGender === 'female' ? 'Mujeres' : 'Otros'}
+                        </h4>
+                        <div className="space-y-3 max-h-60 overflow-y-auto">
+                            {getSelectedData()
+                                .sort((a, b) => (b.spend > 0 ? b.purchaseValue / b.spend : 0) - (a.spend > 0 ? a.purchaseValue / a.spend : 0))
+                                .map((demographic, index) => {
+                                const roas = demographic.spend > 0 ? demographic.purchaseValue / demographic.spend : 0;
+                                const cpa = demographic.purchases > 0 ? demographic.spend / demographic.purchases : 0;
+                                const cpm = demographic.impressions > 0 ? (demographic.spend / demographic.impressions) * 1000 : 0;
+                                const frequency = 1; // Placeholder
+                                const compras = demographic.purchases;
+                                
+                                return (
+                                    <div key={index} className="bg-brand-bg/30 rounded-lg p-3">
+                                        <div className="font-semibold text-brand-text mb-2">
+                                            Edad: {demographic.ageRange}
+                                        </div>
+                                        <div className="grid grid-cols-5 gap-2 text-xs">
+                                            <div>
+                                                <div className="text-brand-text-secondary">ROAS</div>
+                                                <div className="font-bold text-brand-text">{roas.toFixed(2)}</div>
+                                            </div>
+                                            <div>
+                                                <div className="text-brand-text-secondary">CPA</div>
+                                                <div className="font-bold text-brand-text">{cpa.toLocaleString('es-ES', { style: 'currency', currency })}</div>
+                                            </div>
+                                            <div>
+                                                <div className="text-brand-text-secondary">CPM</div>
+                                                <div className="font-bold text-brand-text">{cpm.toLocaleString('es-ES', { style: 'currency', currency })}</div>
+                                            </div>
+                                            <div>
+                                                <div className="text-brand-text-secondary">Frecuencia</div>
+                                                <div className="font-bold text-brand-text">{frequency.toFixed(2)}</div>
+                                            </div>
+                                            <div>
+                                                <div className="text-brand-text-secondary">Compras</div>
+                                                <div className="font-bold text-brand-text">{compras}</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
                         </div>
                     </div>
-                )) : <p className="text-xs text-brand-text-secondary">No hay suficientes datos para mostrar un top.</p>}
+                )}
             </div>
         </MetricSubCard>
     );

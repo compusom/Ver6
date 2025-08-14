@@ -1179,6 +1179,127 @@ app.get('/api/sql/performance', async (req, res) => {
     }
 });
 
+// --- Get detailed performance data for all clients (for PerformanceView) ---
+app.get('/api/sql/performance-details', async (req, res) => {
+    if (!sqlPool) {
+        return res.status(400).json({ success: false, error: 'Not connected to SQL Server' });
+    }
+    
+    try {
+        logger.info('[DEBUG] Getting detailed performance data for all clients');
+        
+        const result = await sqlPool.request().query(`
+            SELECT 
+                c.client_id,
+                c.name as clientName,
+                m.nombre_de_la_campaña as campaignName,
+                m.nombre_del_conjunto_de_anuncios as adSetName,
+                m.nombre_del_anuncio as adName,
+                m.dia as day,
+                m.edad as age,
+                m.sexo as gender,
+                m.divisa as currency,
+                CAST(ISNULL(m.importe_gastado_EUR, 0) as DECIMAL(18,2)) as spend,
+                CAST(ISNULL(m.impresiones, 0) as BIGINT) as impressions,
+                CAST(ISNULL(m.alcance, 0) as BIGINT) as reach,
+                CAST(ISNULL(m.frecuencia, 0) as DECIMAL(5,2)) as frequency,
+                CAST(ISNULL(m.compras, 0) as INT) as purchases,
+                CAST(ISNULL(m.valor_de_conversión_compras, 0) as DECIMAL(18,2)) as purchaseValue,
+                CAST(ISNULL(m.clics_en_el_enlace, 0) as INT) as linkClicks,
+                CAST(ISNULL(m.clics_todos, 0) as INT) as clicksAll,
+                CAST(ISNULL(m.visitas_a_la_página_de_destino, 0) as INT) as landingPageViews,
+                CAST(ISNULL(m.artículos_agregados_al_carrito, 0) as INT) as addsToCart,
+                CAST(ISNULL(m.pagos_iniciados, 0) as INT) as checkoutsInitiated,
+                CAST(ISNULL(m.thruplays, 0) as INT) as thruPlays,
+                CAST(ISNULL(m.tiempo_promedio_video, 0) as DECIMAL(6,2)) as videoAveragePlayTime,
+                CAST(ISNULL(m.me_gusta_en_facebook, 0) as INT) as pageLikes,
+                CAST(ISNULL(m.interacciones_con_la_publicación, 0) as INT) as postInteractions,
+                CAST(ISNULL(m.reacciones_a_publicaciones, 0) as INT) as postReactions,
+                CAST(ISNULL(m.comentarios_de_publicaciones, 0) as INT) as postComments,
+                CAST(ISNULL(m.veces_compartidas_publicaciones, 0) as INT) as postShares,
+                CAST(ISNULL(m.atencion, 0) as INT) as attention,
+                CAST(ISNULL(m.interes, 0) as INT) as interest,
+                CAST(ISNULL(m.deseo, 0) as INT) as desire,
+                m.entrega_de_la_campaña as campaignDelivery,
+                m.entrega_del_conjunto_de_anuncios as adSetDelivery,
+                m.entrega_del_anuncio as adDelivery,
+                m.públicos_personalizados_incluidos as includedCustomAudiences,
+                m.públicos_personalizados_excluidos as excludedCustomAudiences
+            FROM metricas m
+            INNER JOIN archivos_reporte ar ON m.id_reporte = ar.id_reporte
+            INNER JOIN clients c ON ar.client_id = c.client_id
+            WHERE m.nombre_del_anuncio IS NOT NULL 
+                AND m.nombre_del_anuncio != ''
+            ORDER BY c.client_id, m.dia DESC, m.nombre_del_anuncio
+        `);
+        
+        // Group by client_id
+        const performanceByClient = {};
+        result.recordset.forEach(row => {
+            if (!performanceByClient[row.client_id]) {
+                performanceByClient[row.client_id] = [];
+            }
+            
+            // Map to PerformanceRecord format
+            const record = {
+                clientName: row.clientName,
+                campaignName: row.campaignName,
+                adSetName: row.adSetName,
+                adName: row.adName,
+                day: row.day,
+                age: row.age,
+                gender: row.gender,
+                currency: row.currency,
+                spend: row.spend,
+                impressions: row.impressions,
+                reach: row.reach,
+                frequency: row.frequency,
+                purchases: row.purchases,
+                purchaseValue: row.purchaseValue,
+                linkClicks: row.linkClicks,
+                clicksAll: row.clicksAll,
+                landingPageViews: row.landingPageViews,
+                addsToCart: row.addsToCart,
+                checkoutsInitiated: row.checkoutsInitiated,
+                thruPlays: row.thruPlays,
+                videoAveragePlayTime: row.videoAveragePlayTime,
+                pageLikes: row.pageLikes,
+                postInteractions: row.postInteractions,
+                postReactions: row.postReactions,
+                postComments: row.postComments,
+                postShares: row.postShares,
+                attention: row.attention,
+                interest: row.interest,
+                desire: row.desire,
+                campaignDelivery: row.campaignDelivery,
+                adSetDelivery: row.adSetDelivery,
+                adDelivery: row.adDelivery,
+                includedCustomAudiences: row.includedCustomAudiences,
+                excludedCustomAudiences: row.excludedCustomAudiences
+            };
+            
+            performanceByClient[row.client_id].push(record);
+        });
+        
+        const totalRecords = result.recordset.length;
+        const clientCount = Object.keys(performanceByClient).length;
+        
+        logger.info(`[DEBUG] Found ${totalRecords} performance records for ${clientCount} clients`);
+        
+        res.json({ 
+            success: true, 
+            data: performanceByClient, 
+            totalRecords,
+            clientCount,
+            source: 'SQL Server Detailed'
+        });
+        
+    } catch (error) {
+        logger.error(`[SQL] Error getting detailed performance data:`, error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 app.get('/api/sql/clients/:clientId/ads', async (req, res) => {
     if (!sqlPool) {
         return res.status(400).json({ success: false, error: 'Not connected to SQL Server' });
@@ -1202,6 +1323,7 @@ app.get('/api/sql/clients/:clientId/ads', async (req, res) => {
                     COUNT(*) as total_records,
                     SUM(CAST(ISNULL(m.importe_gastado_EUR, 0) as DECIMAL(18,2))) as total_spend,
                     SUM(CAST(ISNULL(m.compras, 0) as INT)) as total_purchases,
+                    SUM(CAST(ISNULL(m.valor_de_conversión_compras, 0) as DECIMAL(18,2))) as total_purchase_value,
                     SUM(CAST(ISNULL(m.impresiones, 0) as BIGINT)) as total_impressions,
                     SUM(CAST(ISNULL(m.clics_todos, 0) as INT)) as total_clicks,
                     MIN(m.dia) as first_date,
@@ -1227,12 +1349,13 @@ app.get('/api/sql/clients/:clientId/ads', async (req, res) => {
             totalRecords: row.total_records,
             totalSpend: row.total_spend || 0,
             totalPurchases: row.total_purchases || 0,
+            totalPurchaseValue: row.total_purchase_value || 0,
             totalImpressions: row.total_impressions || 0,
             totalClicks: row.total_clicks || 0,
             firstDate: row.first_date,
             lastDate: row.last_date,
             reportFile: row.report_file,
-            roas: row.total_spend > 0 ? ((row.total_purchases || 0) / row.total_spend) : 0,
+            roas: row.total_spend > 0 ? ((row.total_purchase_value || 0) / row.total_spend) : 0,
             ctr: row.total_impressions > 0 ? ((row.total_clicks || 0) / row.total_impressions * 100) : 0
         }));
         
@@ -1331,6 +1454,224 @@ app.delete('/api/sql/tables/data', async (req, res) => {
     } catch (error) {
         logger.error('[SQL] Error clearing table data:', error.message);
         res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// --- Execute dimensional stored procedure ---
+app.post('/api/sql/execute-dimensional-procedure', async (req, res) => {
+    if (!sqlPool) {
+        return res.status(400).json({ success: false, error: 'Not connected to SQL Server' });
+    }
+
+    const { importBatchId } = req.body;
+    if (!importBatchId || typeof importBatchId !== 'number') {
+        return res.status(400).json({ success: false, error: 'Valid import_batch_id is required' });
+    }
+
+    logger.info(`[Dimensional] Executing high-performance stored procedure for batch ${importBatchId}`);
+    
+    try {
+        const startTime = Date.now();
+        
+        // Execute the high-performance set-based stored procedure
+        const result = await sqlPool.request()
+            .input('import_batch_id', sql.Int, importBatchId)
+            .execute('sp_load_meta_excel_batch_setbased');
+            
+        const duration = Date.now() - startTime;
+        
+        logger.info(`[Dimensional] Stored procedure completed in ${duration}ms`);
+        
+        res.json({
+            success: true,
+            message: 'Dimensional data loaded successfully',
+            batchId: importBatchId,
+            duration: duration,
+            procedureName: 'sp_load_meta_excel_batch_setbased'
+        });
+        
+    } catch (error) {
+        logger.error(`[Dimensional] Error executing stored procedure:`, error.message);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message,
+            batchId: importBatchId
+        });
+    }
+});
+
+// --- Import Meta Excel data into SQL Server (DIMENSIONAL SYSTEM) ---
+app.post('/api/sql/import-excel-dimensional', upload.single('file'), async (req, res) => {
+    if (!sqlPool) {
+        return res.status(400).json({ success: false, error: 'Not connected to SQL Server' });
+    }
+    if (!req.file) {
+        return res.status(400).json({ success: false, error: 'No file uploaded' });
+    }
+
+    logger.info(`[Dimensional] ===== STARTING DIMENSIONAL EXCEL IMPORT =====`);
+    logger.info(`[Dimensional] File: ${req.file.originalname}`);
+    
+    try {
+        // Read Excel file
+        logger.info(`[Dimensional] Reading Excel file...`);
+        const fileBuffer = fs.readFileSync(req.file.path);
+        const workbook = xlsx.read(fileBuffer, { type: 'buffer' });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        
+        // Detect and skip title rows
+        let startRow = 0;
+        const firstCell = sheet['A1']?.v;
+        if (typeof firstCell === 'string' && firstCell.toLowerCase().includes('raw data report')) {
+            startRow = 1;
+        }
+        const rows = xlsx.utils.sheet_to_json(sheet, { defval: null, range: startRow });
+        logger.info(`[Dimensional] ✅ Parsed ${rows.length} rows from Excel`);
+
+        if (rows.length === 0) {
+            return res.status(400).json({ success: false, error: 'Excel file is empty' });
+        }
+
+        // Create batch record in etl_batches table
+        const batchResult = await sqlPool.request()
+            .input('batch_name', sql.VarChar(255), req.file.originalname)
+            .input('source_file', sql.VarChar(255), req.file.originalname)
+            .input('total_rows', sql.Int, rows.length)
+            .query(`
+                INSERT INTO etl_batches (batch_name, source_file, status, total_rows, created_at)
+                OUTPUT INSERTED.batch_id
+                VALUES (@batch_name, @source_file, 'processing', @total_rows, GETDATE())
+            `);
+            
+        const batchId = batchResult.recordset[0].batch_id;
+        logger.info(`[Dimensional] Created ETL batch with ID: ${batchId}`);
+        
+        // Insert data into staging table (stg_meta_daily)
+        logger.info(`[Dimensional] Inserting data into staging table...`);
+        let insertedRows = 0;
+        let errors = 0;
+        
+        for (let i = 0; i < rows.length; i++) {
+            const row = rows[i];
+            
+            try {
+                // Map Excel columns to staging table columns
+                const request = sqlPool.request()
+                    .input('import_batch_id', sql.Int, batchId)
+                    .input('account_name', sql.VarChar(255), row['Nombre de la cuenta'] || row['Account name'] || '')
+                    .input('campaign_name', sql.VarChar(255), row['Nombre de la campaña'] || row['Campaign name'] || '')
+                    .input('adset_name', sql.VarChar(255), row['Nombre del conjunto de anuncios'] || row['Adset name'] || '')
+                    .input('ad_name', sql.VarChar(255), row['Nombre del anuncio'] || row['Ad name'] || '')
+                    .input('dte', sql.Date, new Date(row['Día'] || row['Day'] || row['Date']))
+                    .input('age_label', sql.VarChar(50), row['Edad'] || row['Age'] || 'Desconocido')
+                    .input('gender_label', sql.VarChar(50), row['Sexo'] || row['Gender'] || 'DESCONOCIDO')
+                    .input('currency_code', sql.VarChar(10), row['Divisa'] || row['Currency'] || 'EUR')
+                    .input('spend', sql.Decimal(12, 2), parseNumber(row['Importe gastado (EUR)'] || row['Amount spent (EUR)'] || 0))
+                    .input('impressions', sql.BigInt, parseInt(row['Impresiones'] || row['Impressions'] || 0))
+                    .input('reach', sql.BigInt, parseInt(row['Alcance'] || row['Reach'] || 0))
+                    .input('frequency', sql.Decimal(5, 2), parseFloat(row['Frecuencia'] || row['Frequency'] || 0))
+                    .input('clicks_all', sql.Int, parseInt(row['Clics (todos)'] || row['Clicks (all)'] || 0))
+                    .input('link_clicks', sql.Int, parseInt(row['Clics en el enlace'] || row['Link clicks'] || 0))
+                    .input('lpv', sql.Int, parseInt(row['Visitas a la página de destino'] || row['Landing page views'] || 0))
+                    .input('purchases', sql.Int, parseInt(row['Compras'] || row['Purchases'] || 0))
+                    .input('conversion_value', sql.Decimal(12, 2), parseNumber(row['Valor de conversión de compras'] || row['Purchase conversion value'] || 0))
+                    .input('campaign_status', sql.VarChar(50), row['Entrega de la campaña'] || row['Campaign delivery'] || 'ACTIVE')
+                    .input('adset_status', sql.VarChar(50), row['Entrega del conjunto de anuncios'] || row['Adset delivery'] || 'ACTIVE')
+                    .input('ad_status', sql.VarChar(50), row['Entrega del anuncio'] || row['Ad delivery'] || 'ACTIVE')
+                    .input('objective_name', sql.VarChar(100), row['Objetivo'] || row['Objective'] || '')
+                    .input('budget_type_name', sql.VarChar(50), row['Tipo de presupuesto de la campaña'] || row['Campaign budget type'] || '')
+                    .input('budget', sql.Decimal(12, 2), parseNumber(row['Presupuesto de la campaña'] || row['Campaign budget'] || 0))
+                    .input('landing_url', sql.VarChar(2000), row['URL del sitio web'] || row['Website URL'] || '')
+                    .input('audiences_included_raw', sql.VarChar(sql.MAX), row['Públicos personalizados incluidos'] || row['Custom audiences included'] || '')
+                    .input('audiences_excluded_raw', sql.VarChar(sql.MAX), row['Públicos personalizados excluidos'] || row['Custom audiences excluded'] || '')
+                    .input('v3s', sql.Int, parseInt(row['Reproducciones de vídeo de 3 segundos'] || row['3-second video plays'] || 0))
+                    .input('v25', sql.Int, parseInt(row['Reproducciones de vídeo hasta el 25%'] || row['Video plays at 25%'] || 0))
+                    .input('v50', sql.Int, parseInt(row['Reproducciones de vídeo hasta el 50%'] || row['Video plays at 50%'] || 0))
+                    .input('v75', sql.Int, parseInt(row['Reproducciones de vídeo hasta el 75%'] || row['Video plays at 75%'] || 0))
+                    .input('v95', sql.Int, parseInt(row['Reproducciones de vídeo hasta el 95%'] || row['Video plays at 95%'] || 0))
+                    .input('v100', sql.Int, parseInt(row['Reproducciones de vídeo hasta el 100%'] || row['Video plays at 100%'] || 0))
+                    .input('thruplays', sql.Int, parseInt(row['ThruPlays'] || row['Thruplays'] || 0))
+                    .input('avg_watch', sql.Decimal(6, 2), parseFloat(row['Tiempo promedio de reproducción del vídeo'] || row['Average video watch time'] || 0));
+                    
+                await request.query(`
+                    INSERT INTO stg_meta_daily (
+                        import_batch_id, account_name, campaign_name, adset_name, ad_name, dte,
+                        age_label, gender_label, currency_code, spend, impressions, reach, frequency,
+                        clicks_all, link_clicks, lpv, purchases, conversion_value,
+                        campaign_status, adset_status, ad_status, objective_name, budget_type_name,
+                        budget, landing_url, audiences_included_raw, audiences_excluded_raw,
+                        v3s, v25, v50, v75, v95, v100, thruplays, avg_watch
+                    ) VALUES (
+                        @import_batch_id, @account_name, @campaign_name, @adset_name, @ad_name, @dte,
+                        @age_label, @gender_label, @currency_code, @spend, @impressions, @reach, @frequency,
+                        @clicks_all, @link_clicks, @lpv, @purchases, @conversion_value,
+                        @campaign_status, @adset_status, @ad_status, @objective_name, @budget_type_name,
+                        @budget, @landing_url, @audiences_included_raw, @audiences_excluded_raw,
+                        @v3s, @v25, @v50, @v75, @v95, @v100, @thruplays, @avg_watch
+                    )
+                `);
+                
+                insertedRows++;
+                
+                if (insertedRows % 100 === 0) {
+                    logger.info(`[Dimensional] Inserted ${insertedRows} rows into staging...`);
+                }
+                
+            } catch (rowError) {
+                errors++;
+                logger.warn(`[Dimensional] Error inserting row ${i + 1}:`, rowError.message);
+            }
+        }
+        
+        logger.info(`[Dimensional] Staging complete: ${insertedRows} inserted, ${errors} errors`);
+        
+        // Update batch status
+        await sqlPool.request()
+            .input('batch_id', sql.Int, batchId)
+            .input('processed_rows', sql.Int, insertedRows)
+            .input('error_rows', sql.Int, errors)
+            .query(`
+                UPDATE etl_batches 
+                SET status = 'staged', processed_rows = @processed_rows, error_rows = @error_rows, updated_at = GETDATE()
+                WHERE batch_id = @batch_id
+            `);
+        
+        // Execute the high-performance stored procedure
+        logger.info(`[Dimensional] Executing high-performance dimensional loading...`);
+        const procedureStartTime = Date.now();
+        
+        await sqlPool.request()
+            .input('import_batch_id', sql.Int, batchId)
+            .execute('sp_load_meta_excel_batch_setbased');
+            
+        const procedureDuration = Date.now() - procedureStartTime;
+        logger.info(`[Dimensional] Dimensional loading completed in ${procedureDuration}ms`);
+        
+        // Update final batch status
+        await sqlPool.request()
+            .input('batch_id', sql.Int, batchId)
+            .query(`
+                UPDATE etl_batches 
+                SET status = 'completed', completed_at = GETDATE(), updated_at = GETDATE()
+                WHERE batch_id = @batch_id
+            `);
+
+        logger.info(`[Dimensional] ✅ Import completed successfully`);
+        
+        res.json({ 
+            success: true, 
+            message: `Successfully processed ${insertedRows} records using dimensional system`,
+            batchId: batchId,
+            recordsProcessed: insertedRows,
+            errors: errors,
+            procedureDuration: procedureDuration
+        });
+
+    } catch (error) {
+        logger.error('[Dimensional] ❌ ERROR IMPORTING EXCEL:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    } finally {
+        fs.unlink(req.file.path, () => {});
     }
 });
 
@@ -2103,6 +2444,62 @@ app.post('/api/clear', (req, res) => {
             success: false, 
             error: error.message 
         });
+    }
+});
+
+// --- Check if dimensional stored procedure exists ---
+app.get('/api/sql/check-dimensional-procedure', async (req, res) => {
+    if (!sqlPool) {
+        return res.status(400).json({ success: false, error: 'Not connected to SQL Server' });
+    }
+    
+    try {
+        const result = await sqlPool.request().query(`
+            SELECT COUNT(*) as count
+            FROM sys.objects 
+            WHERE type = 'P' AND name = 'sp_load_meta_excel_batch_setbased'
+        `);
+        
+        const exists = result.recordset[0].count > 0;
+        
+        res.json({
+            success: true,
+            procedureExists: exists,
+            procedureName: 'sp_load_meta_excel_batch_setbased'
+        });
+        
+    } catch (error) {
+        logger.error('[Dimensional] Error checking stored procedure:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// --- Create dimensional stored procedure ---
+app.post('/api/sql/create-dimensional-procedure', async (req, res) => {
+    if (!sqlPool) {
+        return res.status(400).json({ success: false, error: 'Not connected to SQL Server' });
+    }
+    
+    try {
+        // Read the stored procedure file
+        const procedureSQL = fs.readFileSync('./database/sp_load_meta_excel_batch_setbased.sql', 'utf8');
+        
+        logger.info('[Dimensional] Creating high-performance stored procedure...');
+        
+        // Execute the stored procedure creation
+        await sqlPool.request().query(procedureSQL);
+        
+        logger.info('[Dimensional] ✅ Stored procedure created successfully');
+        
+        res.json({
+            success: true,
+            message: 'High-performance dimensional stored procedure created successfully',
+            procedureName: 'sp_load_meta_excel_batch_setbased'
+        });
+        
+    } catch (error) {
+        logger.error('[Dimensional] Error creating stored procedure:', error.message);
+        res.status(500).json({ success: false, error: error.message });
     }
 });
 
