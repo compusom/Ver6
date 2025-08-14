@@ -198,6 +198,162 @@ const normalizeKey = key =>
         .replace(/^_|_$/g, '')
         .toLowerCase();
 
+// Mapping from report column headers to PerformanceRecord fields
+const META_COLUMN_MAP = {
+    // Spanish keys
+    'nombre de la campaña': 'campaignName',
+    'nombre del conjunto de anuncios': 'adSetName',
+    'nombre del anuncio': 'adName',
+    'día': 'day',
+    'edad': 'age',
+    'sexo': 'gender',
+    'importe gastado (eur)': 'spend',
+    'entrega de la campaña': 'campaignDelivery',
+    'entrega del conjunto de anuncios': 'adSetDelivery',
+    'entrega del anuncio': 'adDelivery',
+    'impresiones': 'impressions',
+    'alcance': 'reach',
+    'frecuencia': 'frequency',
+    'compras': 'purchases',
+    'visitas a la página de destino': 'landingPageViews',
+    'clics (todos)': 'clicksAll',
+    'cpm (costo por mil impresiones)': 'cpm',
+    'ctr (todos)': 'ctrAll',
+    'cpc (todos)': 'cpcAll',
+    'reproducciones de video de 3 segundos': 'videoPlays3s',
+    'pagos iniciados': 'checkoutsInitiated',
+    'me gusta en facebook': 'pageLikes',
+    'artículos agregados al carrito': 'addsToCart',
+    'pagos iniciados en el sitio web': 'checkoutsInitiatedOnWebsite',
+    'presupuesto de la campaña': 'campaignBudget',
+    'tipo de presupuesto de la campaña': 'campaignBudgetType',
+    'públicos personalizados incluidos': 'includedCustomAudiences',
+    'públicos personalizados excluidos': 'excludedCustomAudiences',
+    'clics en el enlace': 'linkClicks',
+    'información de pago agregada': 'paymentInfoAdds',
+    'interacción con la página': 'pageEngagement',
+    'comentarios de publicaciones': 'postComments',
+    'interacciones con la publicación': 'postInteractions',
+    'reacciones a publicaciones': 'postReactions',
+    'veces que se compartieron las publicaciones': 'postShares',
+    'puja': 'bid',
+    'tipo de puja': 'bidType',
+    'url del sitio web': 'websiteUrl',
+    'ctr (porcentaje de clics en el enlace)': 'ctrLink',
+    'divisa': 'currency',
+    'valor de conversión de compras': 'purchaseValue',
+    'objetivo': 'objective',
+    'tipo de compra': 'purchaseType',
+    'inicio del informe': 'reportStart',
+    'fin del informe': 'reportEnd',
+    'atencion': 'attention',
+    'deseo': 'desire',
+    'interes': 'interest',
+    'reproducciones de video hasta el 25%': 'videoPlays25percent',
+    'reproducciones de video hasta el 50%': 'videoPlays50percent',
+    'reproducciones de video hasta el 75%': 'videoPlays75percent',
+    'reproducciones de video hasta el 95%': 'videoPlays95percent',
+    'reproducciones de video hasta el 100%': 'videoPlays100percent',
+    'porcentaje de reproducciones de video de 3 segundos por impresiones': 'videoPlayRate3s',
+    'aov': 'aov',
+    'lp view rate': 'lpViewRate',
+    'adc – lpv': 'adcToLpv',
+    'captura de video': 'videoCapture',
+    'captura video': 'videoCapture',
+    'tasa de conversión de landing': 'landingConversionRate',
+    '% compras': 'percentPurchases',
+    'visualizaciones': 'visualizations',
+    'cvr(link click)': 'cvrLinkClick',
+    'retencion video': 'videoRetentionProprietary',
+    'retención de video': 'videoRetentionMeta',
+    'tiempo promedio de reproducción del video': 'videoAveragePlayTime',
+    'thruplays': 'thruPlays',
+    'reproducciones de video': 'videoPlays',
+    'reproducciones de video continuas de 2 segundos únicas': 'videoPlays2sContinuousUnique',
+    'ctr único (porcentaje de clics en el enlace)': 'ctrUniqueLink',
+    'nombre de la cuenta': 'accountName',
+    'impresiones/compras': 'impressionsPerPurchase',
+    'nombre del video': 'videoFileName',
+    'imagen, video y presentación': 'creativeIdentifier',
+    'porcentaje de compras por visitas a la página de destino': 'purchaseRateFromLandingPageViews',
+    'nombre de la imagen': 'imageName',
+    // English keys
+    'campaign name': 'campaignName',
+    'ad set name': 'adSetName',
+    'ad name': 'adName',
+    'day': 'day',
+    'age': 'age',
+    'gender': 'gender',
+    'amount spent (eur)': 'spend',
+    'campaign delivery': 'campaignDelivery',
+    'ad set delivery': 'adSetDelivery',
+    'ad delivery': 'adDelivery',
+    'impressions': 'impressions',
+    'reach': 'reach',
+    'frequency': 'frequency',
+    'purchases': 'purchases',
+    'landing page views': 'landingPageViews',
+    'clicks (all)': 'clicksAll',
+    'cpm (cost per 1,000 impressions)': 'cpm',
+    'ctr (all)': 'ctrAll',
+    'cpc (all)': 'cpcAll',
+    '3-second video plays': 'videoPlays3s',
+    'checkouts initiated': 'checkoutsInitiated',
+    'page likes': 'pageLikes',
+    'adds to cart': 'addsToCart',
+    'checkouts initiated on website': 'checkoutsInitiatedOnWebsite',
+    'campaign budget': 'campaignBudget',
+    'campaign budget type': 'campaignBudgetType',
+    'included custom audiences': 'includedCustomAudiences',
+    'excluded custom audiences': 'excludedCustomAudiences',
+    'link clicks': 'linkClicks',
+    'payment info adds': 'paymentInfoAdds',
+    'page engagement': 'pageEngagement',
+    'post comments': 'postComments',
+    'post interactions': 'postInteractions',
+    'post reactions': 'postReactions',
+    'post shares': 'postShares',
+    'bid': 'bid',
+    'bid type': 'bidType',
+    'website url': 'websiteUrl',
+    'ctr (link click-through rate)': 'ctrLink',
+    'currency': 'currency',
+    'purchase conversion value': 'purchaseValue',
+    'objective': 'objective',
+    'purchase type': 'purchaseType',
+    'reporting starts': 'reportStart',
+    'reporting ends': 'reportEnd',
+    'attention': 'attention',
+    'desire': 'desire',
+    'interest': 'interest',
+    'video plays at 25%': 'videoPlays25percent',
+    'video plays at 50%': 'videoPlays50percent',
+    'video plays at 75%': 'videoPlays75percent',
+    'video plays at 95%': 'videoPlays95percent',
+    'video plays at 100%': 'videoPlays100percent',
+    '3-second video play rate': 'videoPlayRate3s',
+    'video capture': 'videoCapture',
+    'landing page conversion rate': 'landingConversionRate',
+    '% purchases': 'percentPurchases',
+    'cvr (link click)': 'cvrLinkClick',
+    'video retention (proprietary)': 'videoRetentionProprietary',
+    'video retention (meta)': 'videoRetentionMeta',
+    'average video play time': 'videoAveragePlayTime',
+    'video plays': 'videoPlays',
+    '2-second continuous video plays (unique)': 'videoPlays2sContinuousUnique',
+    'unique ctr (link click-through rate)': 'ctrUniqueLink',
+    'account name': 'accountName',
+    'impressions/purchases': 'impressionsPerPurchase',
+    'video file name': 'videoFileName',
+    'image name': 'imageName',
+    'creative asset': 'creativeIdentifier'
+};
+
+const SQL_TO_PR_FIELD = Object.fromEntries(
+    Object.entries(META_COLUMN_MAP).map(([header, field]) => [normalizeKey(header), field])
+);
+SQL_TO_PR_FIELD['unique_id'] = 'uniqueId';
+
 // Meta Excel to Database Field Mapping (COMPLETO)
 const META_FIELD_MAPPING = new Map([
     // Identificadores principales
@@ -2238,62 +2394,48 @@ app.get('/api/performance', async (req, res) => {
         // Priorizar SQL Server si está conectado
         if (sqlPool) {
             logger.info('[Server] Loading performance data from SQL Server');
-            
+
             const result = await sqlPool.request().query(`
-                SELECT 
-                    c.client_id,
-                    c.name as client_name,
-                    ar.nombre_archivo,
-                    ar.period_start,
-                    ar.period_end,
-                    ar.uploaded_at,
-                    COUNT(m.id_metricas) as total_records,
-                    SUM(CAST(m.importe_gastado_EUR as DECIMAL(18,2))) as total_spend,
-                    SUM(CAST(m.compras as INT)) as total_purchases,
-                    SUM(CAST(m.impresiones as BIGINT)) as total_impressions,
-                    COUNT(DISTINCT m.nombre_del_anuncio) as unique_ads
-                FROM clients c
-                LEFT JOIN archivos_reporte ar ON c.client_id = ar.client_id
-                LEFT JOIN metricas m ON ar.id_reporte = m.id_reporte
-                GROUP BY c.client_id, c.name, ar.nombre_archivo, ar.period_start, ar.period_end, ar.uploaded_at
-                ORDER BY ar.uploaded_at DESC
+                SELECT c.client_id, m.*
+                FROM metricas m
+                INNER JOIN archivos_reporte ar ON m.id_reporte = ar.id_reporte
+                INNER JOIN clients c ON ar.client_id = c.client_id
+                ORDER BY m.id_metricas DESC
             `);
-            
+
             const performanceData = {};
-            
+
             result.recordset.forEach(row => {
-                if (!performanceData[row.client_id]) {
-                    performanceData[row.client_id] = {
-                        clientName: row.client_name,
-                        currency: "EUR",
-                        reports: []
-                    };
+                const clientId = row.client_id;
+                if (!performanceData[clientId]) {
+                    performanceData[clientId] = [];
                 }
-                
-                if (row.nombre_archivo) {
-                    performanceData[row.client_id].reports.push({
-                        fileName: row.nombre_archivo,
-                        periodStart: row.period_start,
-                        periodEnd: row.period_end,
-                        uploadedAt: row.uploaded_at,
-                        totalRecords: row.total_records || 0,
-                        totalSpend: row.total_spend || 0,
-                        totalPurchases: row.total_purchases || 0,
-                        totalImpressions: row.total_impressions || 0,
-                        uniqueAds: row.unique_ads || 0
-                    });
+
+                const record = { clientId: String(clientId) };
+                Object.entries(row).forEach(([col, value]) => {
+                    const key = SQL_TO_PR_FIELD[normalizeKey(col)];
+                    if (key && key !== 'clientId') {
+                        record[key] = value;
+                    }
+                });
+
+                if (!record.uniqueId) {
+                    record.uniqueId = `${record.day || ''}_${record.campaignName || ''}_${record.adName || ''}_${record.age || ''}_${record.gender || ''}`;
                 }
+
+                performanceData[clientId].push(record);
             });
-            
-            logger.info(`[Server] ✅ Retrieved SQL performance data for ${Object.keys(performanceData).length} clients`);
-            
-            res.json({ 
-                success: true, 
+
+            logger.info(`[Server] ✅ Retrieved SQL performance data for ${result.recordset.length} records across ${Object.keys(performanceData).length} clients`);
+
+            res.json({
+                success: true,
                 data: performanceData,
                 clientCount: Object.keys(performanceData).length,
+                totalRecords: result.recordset.length,
                 source: 'SQL Server'
             });
-            
+
         } else {
             // Fallback a SQLite si SQL Server no está disponible
             logger.info('[Server] SQL Server not available, using SQLite fallback');
